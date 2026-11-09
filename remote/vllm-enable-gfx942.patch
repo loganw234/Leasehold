@@ -1,0 +1,39 @@
+diff --git a/src/cpp/include/lemon/backends/vllm/vllm.h b/src/cpp/include/lemon/backends/vllm/vllm.h
+index eb0f722..0036fb5 100644
+--- a/src/cpp/include/lemon/backends/vllm/vllm.h
++++ b/src/cpp/include/lemon/backends/vllm/vllm.h
+@@ -25,9 +25,9 @@ inline const BackendDescriptor descriptor = {
+          "Custom arguments to pass to vllm-server", "vLLM Options"},
+     },
+     /*support*/ {
+-        // gfx942/gfx950 (CDNA) omitted until their vLLM/ROCm assets ship in lemonade-sdk/vllm-rocm;
+-        // everything else is wired (incl. the rocm_arch_overrides pins), so re-add them here once that lands.
+-        {"rocm", BackendTier::Experimental, BackendFormat::Python, {"linux"}, {{"amd_gpu", {"gfx1150", "gfx1151", "gfx110X", "gfx120X"}}}, "Strix Halo iGPU (gfx1151)"},
++        // gfx942 (MI300X) installs the CDNA release line pinned by vllm.rocm_arch_overrides.
++        // gfx950 (CDNA4) stays omitted until its asset is validated on hardware.
++        {"rocm", BackendTier::Experimental, BackendFormat::Python, {"linux"}, {{"amd_gpu", {"gfx1150", "gfx1151", "gfx110X", "gfx120X", "gfx942"}}}, "Strix Halo iGPU (gfx1151), Instinct MI300X (gfx942)"},
+     },
+     /*about*/ {
+         {"rocm", {"vLLM, the high-throughput serving engine for batched requests, packaged with ROCm PyTorch.",
+diff --git a/test/cpp/test_vllm_cdna_gating.cpp b/test/cpp/test_vllm_cdna_gating.cpp
+index 6c44051..b7c6b52 100644
+--- a/test/cpp/test_vllm_cdna_gating.cpp
++++ b/test/cpp/test_vllm_cdna_gating.cpp
+@@ -30,12 +30,12 @@ void expect(bool condition, const std::string& label) {
+ }  // namespace
+ 
+ int main() {
+-    // gfx942 is not in the installable matrix until its asset ships, though everything
+-    // below it is wired and tested.
+-    expect(!SystemInfo::backend_supports_arch("vllm", "rocm", "gfx942"),
+-           "vllm:rocm gfx942 is NOT advertised installable yet (asset pending; infra staged)");
++    // gfx942 (MI300X) is in the installable matrix; gfx950 stays out until its asset is
++    // validated on hardware.
++    expect(SystemInfo::backend_supports_arch("vllm", "rocm", "gfx942"),
++           "vllm:rocm gfx942 (MI300X) is advertised installable");
+     expect(!SystemInfo::backend_supports_arch("vllm", "rocm", "gfx950"),
+-           "vllm:rocm gfx950 is NOT advertised installable yet (asset pending; infra staged)");
++           "vllm:rocm gfx950 is NOT advertised installable yet (asset not validated)");
+ 
+     expect(SystemInfo::backend_supports_arch("vllm", "rocm", "gfx1100"),
+            "vllm:rocm still supports gfx1100 via gfx110X wildcard");
