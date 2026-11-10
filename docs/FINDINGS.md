@@ -27,6 +27,9 @@ Each model was downloaded, loaded at 32,768 tokens with every layer on the GPU, 
   - The only misses came from Qwen3-4B-Instruct-2507, which doesn't reason first: it answered 401 for 17 × 23 both times.
   - The cases are simple single calls. Harder ones would be needed to rank models: several tools in sequence, long arguments, or a tool's error to recover from.
 - **Sampler settings.** Lemonade has per-model sampler settings for the Qwen models (temperature 0.6 and top-p 0.85 for Qwen3-4B-Instruct-2507), but none for granite or K2-Horizon, which run on llama.cpp's defaults.
+- **Lemonade hides what the machine can't hold.**
+  - On the 8 GB box, `GET /api/v1/models?show_all=true` listed no catalog model larger than the machine could hold; its log reads `max model size: 8.0 GB`. That includes the MI300X candidates.
+  - The installed package's full catalog is `/usr/share/lemonade-server/resources/server_models.json`. Read that when choosing models for a bigger machine from a small one.
 
 ## 2026-11-10: Pi agents on the RX 7600: how much context each agent needs
 
