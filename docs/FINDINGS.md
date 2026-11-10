@@ -50,6 +50,11 @@ Each model was downloaded, loaded at 32,768 tokens with every layer on the GPU, 
 - **A `length` stop ends Pi's print mode with exit code 0 and no output.** A harness has to grade the work, or read the transcript's last `stopReason`, to know that a session ran out of room.
 - **Pi's `thinkingLevel: off` doesn't reach the model over `openai-completions`.** Qwen3.5 reasoned anyway, as its chat template does by default. Lemonade doesn't count reasoning tokens separately; they are inside the output tokens.
 - **Every tool call was well formed.** The tool errors Pi recorded (26 in run 1) were bash commands that failed, such as failing tests and compiler errors.
+- **Pi's bash tool has no timeout.**
+  - With Qwen3.5-4B-MTP, the agent twice edited code into an endless loop: a binary search, then `clz64`. The test run then spun at 100% CPU until the task's 25-minute limit stopped Pi, with the agent waiting on it the whole time.
+  - The agents' service now sets `LimitCPU=300`, which kills any single process after five minutes of CPU, and the agent gets the error back.
+  - Rerun with the limit, the MTP model passed 5 of 6. The sixth ran out of time one case short of passing (`INT64_MAX / INT64_MIN`).
+- **Multi-token prediction pays off in agent use.** Over a whole run, Qwen3.5-4B-MTP produced 77.7 output tokens per second of model time, against 52.6 for Qwen3.5-4B: 1.48 times as fast. Task times still varied more with each run's path than with the model.
 - **The confinement held.** These systemd properties gave the agent only what it needed:
   - `IPAddressDeny=any` with `IPAddressAllow=localhost`;
   - `ProtectSystem=strict` with `ReadWritePaths=` its home;
