@@ -54,7 +54,7 @@ It's the deployment kit that [HonestHarness's research notes](https://github.com
 
 ## Your own Ubuntu box
 
-Every command also works against any Ubuntu 24.04 machine you can SSH into. Pass your login with `-User` (the default is `root`, the droplet's login); commands that need root then go through `sudo`, which asks for your password.
+Every command also works against any Ubuntu 24.04 machine you can SSH into. Pass your login with `-User` (the default is `root`, the droplet's login); commands that need root then go through `sudo`, which asks for your password. Run `key` first: it adds your SSH public key to the machine, so later commands don't ask for the login password on every connection.
 
 [rocm-box/README.md](rocm-box/README.md) covers installing ROCm 10.1 on a Radeon card with the `rocm` command. After that, `setup`, `tunnel` and `pi` rehearse a droplet session for free. The remembered IP is the last machine you ran `setup`, `rocm` or `up` against, so pass `-Ip` when you switch machines.
 

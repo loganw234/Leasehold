@@ -31,10 +31,11 @@ An Ubuntu machine with a Radeon card that you SSH into from your PC, for HIP and
 From the Leasehold folder:
 
 ```powershell
-.\leasehold.ps1 rocm -Ip <box-ip> -User <your-login>
+.\leasehold.ps1 key -Ip <box-ip> -User <your-login>
+.\leasehold.ps1 rocm -User <your-login>
 ```
 
-`sudo` will ask for your password. `setup-rocm-box.sh` takes up to three runs, and each tells you whether to reboot before the next:
+`key` adds your SSH public key to the box, asking for your login password one last time. Without it, every SSH connection a command makes asks again, which is four times for `rocm`. `sudo` still asks for your password once per run. `setup-rocm-box.sh` takes up to three runs, and each tells you whether to reboot before the next:
 
 1. Installs the HWE kernel, if the box isn't already on 7.0 or newer.
 2. Installs AMD's driver and ROCm 10.1 with `amdgpu-install --usecase=rocm,graphics --gfxversion=auto`, and adds you to the `render` and `video` groups.

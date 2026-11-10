@@ -6,6 +6,9 @@
 .DESCRIPTION
   Commands:
     setup      Upload the remote scripts, install Lemonade, and load a model (about 15 minutes).
+    key        Add your SSH public key to the remote account, so later commands stop asking for its
+               login password; sudo still asks once per run. For your own box: a droplet gets the
+               key when it is created.
     tunnel     Forward the remote Lemonade port to this PC over SSH. Leave it running.
     pi         Start Pi against Lemonade through the tunnel, from your project folder.
     claude     Start Claude Code against Lemonade through the tunnel, from your project folder.
@@ -33,7 +36,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('setup', 'tunnel', 'pi', 'claude', 'rocm', 'vllm-test', 'logs', 'report', 'ssh', 'status', 'down', 'up')]
+    [ValidateSet('setup', 'key', 'tunnel', 'pi', 'claude', 'rocm', 'vllm-test', 'logs', 'report', 'ssh', 'status', 'down', 'up')]
     [string]$Command,
 
     [string]$Ip,
@@ -329,6 +332,22 @@ switch ($Command) {
         $ip = Resolve-Ip
         $sshArgs = Get-SshArgs
         & ssh @sshArgs -t "$User@$ip"
+    }
+
+    'key' {
+        $ip = Resolve-Ip
+        if ($Identity) { $pubPath = "$Identity.pub" } else { $pubPath = Join-Path $env:USERPROFILE '.ssh\id_ed25519.pub' }
+        if (-not (Test-Path $pubPath)) { throw "No public key at $pubPath. Create one with: ssh-keygen -t ed25519" }
+        $pub = (Get-Content $pubPath -Raw).Trim()
+        # One key on one line, with no quotes, so it can sit inside the single-quoted remote command.
+        if ($pub -notmatch '^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp\d+) [A-Za-z0-9+/=]+( [^''"\r\n]*)?$') {
+            throw "$pubPath doesn't look like a single SSH public key."
+        }
+        Write-Host "Adding $pubPath to $User@${ip}'s authorized_keys. SSH asks for the password one last time."
+        Invoke-Remote ("umask 077; mkdir -p ~/.ssh && touch ~/.ssh/authorized_keys && " +
+            "{ grep -qxF '$pub' ~/.ssh/authorized_keys || echo '$pub' >> ~/.ssh/authorized_keys; }")
+        Set-Content -Path $IpFile -Value $ip
+        Write-Host 'Done. Later commands log in with your key; sudo still asks for your password once per run.'
     }
 
     'status' {
