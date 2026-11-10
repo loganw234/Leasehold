@@ -20,6 +20,18 @@ info() { printf '    %s\n' "$*"; }
 warn() { printf '\033[1;33mWARN:\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
+# An Ubuntu mirror in the middle of a sync makes apt-get update fail ("File has unexpected size ...
+# Mirror sync in progress?"), so retry, then carry on with the package lists already here.
+apt_update() {
+  local i
+  for ((i = 1; i <= 3; i++)); do
+    apt-get update -qq && return 0
+    ((i < 3)) && { warn "apt-get update failed (try $i of 3); retrying in 20 s."; sleep 20; }
+  done
+  warn "apt-get update kept failing; continuing with the package lists already on the machine."
+  return 0
+}
+
 [[ ${EUID} -eq 0 ]] || die "Run with sudo: sudo bash $0"
 TARGET_USER=${SUDO_USER:-root}
 TARGET_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
@@ -57,7 +69,7 @@ if [[ -z "$ROCMINFO" ]]; then
   if ((kernel_major < 7)); then
     log "Installing the HWE kernel"
     info "ROCm 10.1 supports Ubuntu 24.04.5 on the HWE 7.0 kernel; this box runs $(uname -r)."
-    apt-get update -qq
+    apt_update
     DEBIAN_FRONTEND=noninteractive apt-get install -y linux-generic-hwe-24.04
     log "Reboot (sudo reboot), then run this script again."
     exit 0
@@ -70,7 +82,7 @@ if [[ -z "$ROCMINFO" ]]; then
   fi
 
   log "Installing prerequisites"
-  apt-get update -qq
+  apt_update
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     wget gpg build-essential libatomic1 libquadmath0 python3.12 python3.12-venv >/dev/null
 

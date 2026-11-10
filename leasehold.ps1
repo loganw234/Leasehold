@@ -19,6 +19,8 @@
     report     Copy the vLLM test report to .\reports\ next to this script.
     ssh        Open a shell on the remote machine.
     status     List your GPU droplets with age and approximate cost (needs doctl).
+    bench      Measure generation speed for -Model with one request, then -Concurrency (default 4)
+               at once, each -MaxTokens (default 256) long: what -Slots buys.
     collect    Save the machine's Lemonade records (config, server log, usage per model, model
                revisions, versions) to .\reports\records-<name>-<time>\ on this PC.
     down       Destroy a GPU droplet (needs doctl). Billing stops only when a droplet is destroyed.
@@ -51,7 +53,7 @@
 param(
     [Parameter(Mandatory = $true, Position = 0)]
     [ValidateSet('setup', 'key', 'tunnel', 'pi', 'claude', 'rocm', 'vllm-test', 'logs', 'report', 'ssh',
-        'collect', 'status', 'down', 'up', 'grant', 'run', 'revoke')]
+        'collect', 'bench', 'status', 'down', 'up', 'grant', 'run', 'revoke')]
     [string]$Command,
 
     [string]$Ip,
@@ -80,6 +82,10 @@ param(
     [string]$SshKey,
     [string]$DropletId,
     [switch]$NoCollect,
+
+    # bench
+    [int]$Concurrency = 4,
+    [int]$MaxTokens = 256,
 
     # pi / claude: anything after -- goes to the agent. run: the remote command.
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -504,6 +510,13 @@ switch ($Command) {
         if ($list.Count -eq 0) { Write-Host 'No GPU droplets exist. Nothing is billing.'; return }
         $list | Format-Table -AutoSize
         Write-Host "Each MI300X bills about `$$UsdPerGpuHour/hour until destroyed, powered off or not."
+    }
+
+    'bench' {
+        Assert-SafeValue $Model 'Model'
+        if ($Concurrency -lt 1 -or $MaxTokens -lt 1) { throw '-Concurrency and -MaxTokens must be at least 1.' }
+        Send-Scripts
+        Invoke-Remote "bash $RemoteDir/bench.sh '$Model' $Concurrency $MaxTokens"
     }
 
     'collect' {

@@ -130,8 +130,7 @@ fi
 
 # ---------------------------------------------------------------------------------------------
 log "Installing build dependencies"
-wait_for_apt
-apt-get -o DPkg::Lock::Timeout=600 update -qq
+apt_update
 apt_install git cmake ninja-build build-essential pkg-config curl jq python3 \
   libcurl4-openssl-dev libssl-dev zlib1g-dev libsystemd-dev libdrm-dev libcap-dev libwebsockets-dev
 info "$(cmake --version | head -1)"

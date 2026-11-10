@@ -6,7 +6,7 @@ Leasehold runs from a Windows PC. It installs Lemonade on an AMD Developer Cloud
 
 It's the deployment kit that [HonestHarness's research notes](https://github.com/loganw234/HonestHarness/blob/main/Research/open-weight-pilot-notes.md) call for: the harness needs only a model's address, and the kit stands up the machine behind it.
 
-**Status: early.** None of this has run on real hardware yet, so expect fixes on the first runs.
+**Status: early.** It has run against a local Radeon RX 7600 box but not yet on an MI300X droplet, so expect fixes on the first droplet runs. [docs/FINDINGS.md](docs/FINDINGS.md) has what the test runs showed.
 
 | Path | Runs on | What it does |
 |---|---|---|
@@ -15,8 +15,10 @@ It's the deployment kit that [HonestHarness's research notes](https://github.com
 | `remote/vllm-gfx942-test.sh` | an MI300X | Builds Lemonade with `vllm-enable-gfx942.patch` and tests which vLLM-ROCm build works on gfx942 |
 | `remote/lib.sh` | the remote machine | Helpers shared by the remote scripts |
 | `remote/collect.sh` | the remote machine | Gathers Lemonade's records before a lease ends (`collect`, `down`) |
+| `remote/bench.sh` | the remote machine | Times one request, then several at once, against the loaded model (`bench`) |
 | `remote/grant-operator.sh` | the remote machine | Creates the account AI assistants use (`grant`) |
 | `AGENTS.md` | AI assistants | What assistants may do on granted machines, and what to ask first |
+| `docs/FINDINGS.md` | you | What running the kit has shown: measurements, bugs found and fixed, open questions |
 | `rocm-box/` | your own Ubuntu box | Installs ROCm 10.1 and checks HIP with a small test program; see [its README](rocm-box/README.md) |
 
 ## Requirements
@@ -105,7 +107,21 @@ By default, Lemonade gives each model one request at a time, so a second agent w
 .\leasehold.ps1 setup -Slots 4 -CtxPerSlot 131072
 ```
 
-llama.cpp splits the context across slots, so each gets `CtxPerSlot` tokens. To keep two different models loaded together, raise `-MaxModels`. Running setup again reloads the model with the new settings.
+llama.cpp splits the context across slots, so each gets `CtxPerSlot` tokens.
+
+The slot count goes in Lemonade's server-wide `llamacpp.rocm_args` setting, so it applies to every llama.cpp model on that server. That keeps the sampler settings Lemonade applies per model family; passing `--parallel` as a model's own arguments would replace them.
+
+To keep two different models loaded together, raise `-MaxModels`. Running setup again reloads the model with the new settings, and `-Slots 1` puts back one slot with the largest context that fits.
+
+Lemonade works out that largest context from the VRAM free when the model loads, so it can differ from one load to the next. On an 8 GB card, the larger of two picks ran about 20% slower; [the findings](docs/FINDINGS.md) have the measurements.
+
+To see what slots buy, `bench` times one request and then several at once:
+
+```powershell
+.\leasehold.ps1 bench -Model Qwen3.6-35B-A3B-GGUF -Concurrency 4
+```
+
+On an RX 7600 with Qwen3.5-4B, four requests at once ran at 150 tokens/s in total, against 57 for one request alone. With one slot, the four requests queue and run at 56 tokens/s in total.
 
 ## Models
 

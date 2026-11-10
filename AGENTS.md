@@ -23,6 +23,10 @@ Leasehold is a Windows PowerShell helper, `leasehold.ps1`, plus scripts that run
 
 Reboots and package installs that a Leasehold script asks for are part of the work. Do them, and say that you did.
 
+## Record what you learn
+
+When a run teaches something, add a dated entry to [docs/FINDINGS.md](docs/FINDINGS.md) in the same commit. That covers a measurement, a surprise, a bug and its fix, or an open question. Give the evidence (the command, the figures, the versions) and the commit that changed things. Keep machine addresses, host names and keys out; it is a public file.
+
 ## Before committing changes to this repository
 
 - Run `bash -n` on every changed `.sh` file, and parse `leasehold.ps1` with the PowerShell parser (`[System.Management.Automation.Language.Parser]::ParseFile`).

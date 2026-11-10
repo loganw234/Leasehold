@@ -44,6 +44,20 @@ wait_for_apt() {
   warn "apt is still busy after 10 minutes; continuing anyway."
 }
 
+# Refreshes apt's package lists, retrying because an Ubuntu mirror in the middle of a sync makes
+# `apt-get update` fail ("File has unexpected size ... Mirror sync in progress?"). A list that
+# still fails to refresh only matters if a package is missing, and then apt_install fails loudly.
+apt_update() {
+  local i
+  for ((i = 1; i <= 3; i++)); do
+    wait_for_apt
+    apt-get -o DPkg::Lock::Timeout=600 update -qq && return 0
+    ((i < 3)) && { warn "apt-get update failed (try $i of 3); retrying in 20 s."; sleep 20; }
+  done
+  warn "apt-get update kept failing; continuing with the package lists already on the machine."
+  return 0
+}
+
 apt_install() {
   wait_for_apt
   DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y -qq "$@" >/dev/null

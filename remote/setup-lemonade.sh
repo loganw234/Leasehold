@@ -35,14 +35,13 @@ info "GPU target: $GFX"
 info "Free disk on /: $(df -h --output=avail / | tail -1 | tr -d ' ')"
 
 log "Installing Lemonade from the stable PPA"
-wait_for_apt
-apt-get -o DPkg::Lock::Timeout=600 update -qq
+apt_update
 apt_install software-properties-common curl jq
 if ! dpkg -s lemonade-server >/dev/null 2>&1; then
   wait_for_apt
-  add-apt-repository -y ppa:lemonade-team/stable >/dev/null
-  wait_for_apt
-  apt-get -o DPkg::Lock::Timeout=600 update -qq
+  # -n skips add-apt-repository's own apt update, which doesn't retry; apt_update does.
+  add-apt-repository -y -n ppa:lemonade-team/stable >/dev/null
+  apt_update
   apt_install lemonade-server
 fi
 command -v lemonade >/dev/null || die "The lemonade CLI is not on PATH after install (looked in PATH and /opt/bin)."
@@ -76,13 +75,19 @@ log "Downloading $MODEL (resumes if a previous run was interrupted)"
 lemonade pull "$MODEL"
 
 log "Loading $MODEL"
-load_args=(--llamacpp rocm --save-options)
+# --parallel goes in the server-wide llamacpp.rocm_args setting. As the model's own llamacpp_args
+# it would replace the sampler settings Lemonade applies per model architecture (for Qwen3.5:
+# --temp 1.0 --top-p 0.95 --top-k 20 and preserve_thinking), which this way are kept.
 if ((SLOTS > 1)); then
+  lemonade config set "llamacpp.rocm_args=--parallel $SLOTS" >/dev/null
   # llama.cpp splits the context across slots, so give it slots x per-slot context.
-  load_args+=(--ctx-size "$((SLOTS * CTX_PER_SLOT))" "--llamacpp-args=--parallel $SLOTS")
-  info "$SLOTS slots x $CTX_PER_SLOT tokens = $((SLOTS * CTX_PER_SLOT)) tokens of context"
+  ctx=$((SLOTS * CTX_PER_SLOT))
+  info "$SLOTS slots x $CTX_PER_SLOT tokens = $ctx tokens of context"
+else
+  lemonade config set "llamacpp.rocm_args=" >/dev/null
+  ctx=-1   # Lemonade picks the largest context that fits
 fi
-lemonade load "$MODEL" "${load_args[@]}"
+lemonade load "$MODEL" --llamacpp rocm "--ctx-size=$ctx" --save-options
 lemonade status --json | jq '.models[] | {model_name, recipe, status, recipe_options}'
 info "VRAM in use: $(vram_gb used) GB of $(vram_gb total) GB"
 
