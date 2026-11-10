@@ -84,9 +84,13 @@ log "Loading $MODEL"
 #   --fit off -ngl all  Every layer on the GPU, or the load fails. llama.cpp's default (--fit on)
 #                       keeps 1 GiB of VRAM spare by quietly moving layers to the CPU; on an 8 GB
 #                       card that made generation up to 3.5 times slower.
+#   --cache-ram MiB     llama.cpp keeps earlier prompts' KV cache in system RAM, up to 8 GiB by
+#                       default: more than a small machine has. Capped at a quarter of RAM.
 #   --parallel N        N slots: requests served at once.
 ctx=$((SLOTS * CTX_PER_SLOT))
-rocm_args='--fit off -ngl all'
+cache_mib=$(awk '/^MemTotal:/ { printf "%d", $2 / 4096 }' /proc/meminfo)
+((cache_mib > 8192)) && cache_mib=8192
+rocm_args="--fit off -ngl all --cache-ram $cache_mib"
 if ((SLOTS > 1)); then rocm_args+=" --parallel $SLOTS"; fi
 lemonade config set "llamacpp.rocm_args=$rocm_args" >/dev/null
 info "$SLOTS slot(s) x $CTX_PER_SLOT tokens = $ctx tokens of context, every layer on the GPU"
@@ -104,7 +108,14 @@ if ! lemonade load "$MODEL" --llamacpp rocm "--ctx-size=$ctx" --save-options; th
   die "Loading $MODEL failed. Check: journalctl -u $UNIT -n 100"
 fi
 lemonade status --json | jq '.models[] | {model_name, recipe, status, recipe_options}'
-info "VRAM in use: $(vram_gb used) GB of $(vram_gb total) GB"
+vram_used=$(vram_gb used)
+vram_total=$(vram_gb total)
+info "VRAM in use: $vram_used GB of $vram_total GB"
+# Long prompts take a little more VRAM as they run (0.2 GB more at 120K tokens on an 8 GB card).
+vram_free=$(awk -v u="$vram_used" -v t="$vram_total" 'BEGIN { printf "%.1f", t - u }')
+if awk -v f="$vram_free" 'BEGIN { exit !(f < 1.0) }' && gpu_drives_display; then
+  warn "Only $vram_free GB of VRAM is free, and this GPU also drives a screen. When the screen needs VRAM, the driver moves the model's buffers into system RAM; on an 8 GB card that got llama-server killed during a long prompt. Leave about 1 GB free with a smaller -CtxPerSlot, or stop the desktop while serving (sudo systemctl stop gdm)."
+fi
 
 if [[ "$SKIP_TESTS" != 1 ]]; then
   log "Smoke test 1/3: chat completion"

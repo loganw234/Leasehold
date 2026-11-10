@@ -6,6 +6,43 @@ The test machine for the 2026-11-09/10 entries was an Ubuntu 24.04 desktop with 
 
 ---
 
+## 2026-11-10: filling the context, and a GPU that also drives a screen
+
+The new `depth` command sends prompts of a given size: a made-up weather log with an access code hidden halfway down. It records how long the model took to read the prompt, whether it found the code, and how fast it then generated at that depth. Last, it sends a prompt longer than one slot's context. Qwen3.5-4B-GGUF, one slot:
+
+| Prompt | Read in | Reading speed | Code | Generation at that depth |
+|---|---|---|---|---|
+| 8,047 tokens | 4.5 s | 1,793 tok/s | found | 54.2 tok/s |
+| 31,981 | 21.9 s | 1,459 tok/s | found | 46.7 tok/s |
+| 60,016 | 50.9 s | 1,180 tok/s | found | 40.2 tok/s |
+| 119,913 | 142.9 s | 839 tok/s | found | 30.8 tok/s |
+
+- **At depth.** Reading and generation both slow as the context fills. An agent turn that re-reads 120K tokens would take more than two minutes on this card. In practice the prompt cache spares most of that, because each turn only reads what is new.
+- **Overrunning the context.** A request longer than the context gets a clean HTTP 400: `request (134947 tokens) exceeds the available context size (131072 tokens), try increasing it`. Pi has to compact before then.
+
+**The 120K prompt first crashed the server.** On the first try, at the 131,072-token default with the box's login screen running:
+- The kernel's OOM killer killed llama-server (exit 137).
+- systemd then stopped the whole `lemond` unit (`Failed with result 'oom-kill'`) and restarted it.
+- The first llama-server after the restart logged `failed to initialize ROCm: no ROCm-capable device is detected`.
+
+**The cause was the screen, not the model.**
+- The RX 7600 also drives the box's monitor (HDMI connected, GDM's login screen). The kill happened inside the GPU driver, while the display was pinning a framebuffer: `amdgpu_dm_plane_helper_prepare_fb` → `amdgpu_bo_pin` → `ttm_bo_evict` → `ttm_bo_bounce_temp_buffer` → `__ttm_pool_alloc`.
+- With VRAM full, the driver moves other buffers into system RAM to make room for the screen, and that allocation failed.
+- llama-server held only 1.3 GB of anonymous memory when it was killed, so its own use of system RAM wasn't the cause.
+- **The same 120K prompt with the login screen stopped** went through, at the speeds in the table. VRAM ended at 8.6 of 8.6 GB, 0.2 GB more than after loading.
+- **Starting the login screen again** with VRAM in that state got llama-server killed once more, by the display thread itself (`KMS thread invoked oom-killer`).
+- **At 65,536 tokens,** VRAM peaks at 6.6 GB. With the screen on, the 8K, 32K and 60K rows above all passed.
+
+**Changes.**
+- When a GPU with a screen connected has less than 1 GB of VRAM free after loading, setup now warns and suggests a smaller `-CtxPerSlot` or stopping the desktop while serving. Checked: it warns at 131,072 (0.2 GB free) and stays quiet at 65,536 (2.2 GB free).
+- The ROCm box now runs with `-CtxPerSlot 65536`.
+- A droplet's MI300X drives no screen.
+
+**llama.cpp's prompt cache.**
+- llama-server keeps earlier prompts' KV cache in system RAM, up to 8 GiB by default (`--cache-ram`). That is more than this box's 7.9 GB.
+- It wasn't the cause here, but available RAM fell by 1.6 GB over three long prompts as the cache filled.
+- Setup now caps it at a quarter of RAM: 1,972 MiB here, and llama.cpp's own 8,192 on a machine with more than 32 GiB.
+
 ## 2026-11-10: near full VRAM, llama.cpp quietly moves layers to the CPU
 
 **Seen.** With one slot, setup used to let Lemonade pick the context (`--ctx-size=-1`). On the same card, with the same model and Lemonade version, it picked 95,354 tokens on 2026-11-09 and 98,631 on 2026-11-10. The larger pick generated about 20% slower.

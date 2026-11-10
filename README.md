@@ -16,6 +16,7 @@ It's the deployment kit that [HonestHarness's research notes](https://github.com
 | `remote/lib.sh` | the remote machine | Helpers shared by the remote scripts |
 | `remote/collect.sh` | the remote machine | Gathers Lemonade's records before a lease ends (`collect`, `down`) |
 | `remote/bench.sh` | the remote machine | Times one request, then several at once, against the loaded model (`bench`) |
+| `remote/depth.sh` | the remote machine | Times long prompts and checks the model finds a fact deep in them (`depth`) |
 | `remote/grant-operator.sh` | the remote machine | Creates the account AI assistants use (`grant`) |
 | `AGENTS.md` | AI assistants | What assistants may do on granted machines, and what to ask first |
 | `docs/FINDINGS.md` | you | What running the kit has shown: measurements, bugs found and fixed, open questions |
@@ -101,13 +102,22 @@ Each `run` is appended to `runs.log`. [AGENTS.md](AGENTS.md) tells assistants wh
 
 ## Context size
 
-Setup pins the context at `-Slots` × `-CtxPerSlot` tokens, 131,072 by default, and puts every layer of the model on the GPU. If that doesn't fit in VRAM, the load fails and setup shows llama.cpp's error; run it again with a smaller `-CtxPerSlot`. On an 8 GB card, Qwen3.5-4B fits 131,072 tokens with one slot.
+Setup pins the context at `-Slots` × `-CtxPerSlot` tokens, 131,072 by default, and puts every layer of the model on the GPU. If that doesn't fit in VRAM, the load fails and setup shows llama.cpp's error; run it again with a smaller `-CtxPerSlot`. On an 8 GB card, Qwen3.5-4B fits 131,072 tokens with one slot, but only if the card drives no screen (see below).
 
-Setup overrides two defaults:
+Setup overrides three defaults:
 - **Lemonade's own pick.** Lemonade works the context out from the VRAM free when the model loads, so it can differ from one load to the next.
 - **llama.cpp's fitting.** When a context leaves less than 1 GiB of VRAM spare, llama.cpp moves layers to the CPU instead of failing (`--fit on`), and nothing in Lemonade's log says so. On an 8 GB card that made generation up to 3.5 times slower. Setup passes `--fit off -ngl all`.
+- **llama.cpp's prompt cache.** llama.cpp keeps earlier prompts' KV cache in system RAM, up to 8 GiB by default (`--cache-ram`). Setup caps it at a quarter of the machine's RAM.
 
-[The findings](docs/FINDINGS.md) have the measurements.
+**A GPU that also drives a screen** needs VRAM of its own. When the screen asks for some and none is free, the driver moves the model's buffers into system RAM. On an 8 GB card at 131,072 tokens, that got llama-server killed by the OOM killer, both during a 120K-token prompt and when the login screen restarted. Setup warns when such a card has less than 1 GB free. Leave that much with a smaller `-CtxPerSlot` (65,536 on the RX 7600), or stop the desktop while serving. A droplet's MI300X drives no screen.
+
+To see what a long context costs, `depth` sends prompts of 8K to 120K tokens. It checks that the model finds a fact hidden halfway down, and shows what a request longer than the context gets (HTTP 400):
+
+```powershell
+.\leasehold.ps1 depth -Model Qwen3.6-35B-A3B-GGUF -Depths '8000 64000 120000'
+```
+
+On the RX 7600 with Qwen3.5-4B, reading slowed from about 1,800 to 840 tokens/s between 8K and 120K, and generation from 54 to 31 tokens/s. [The findings](docs/FINDINGS.md) have the measurements.
 
 ## Several agents at once
 
@@ -141,7 +151,7 @@ Any model in Lemonade's catalog works, as does a Hugging Face GGUF that Lemonade
 | `Qwen3-Coder-Next-GGUF` | 48 GB | Coding and tool calling |
 | `gpt-oss-120b-mxfp-GGUF` | 63 GB | Reasoning and tool calling |
 | `Qwen3.5-122B-A10B-GGUF` | 78 GB | Still fits a 128 GB Strix Halo |
-| `Qwen3.5-4B-GGUF` | 3.6 GB | For 8 GB cards |
+| `Qwen3.5-4B-GGUF` | 3.6 GB | For 8 GB cards; use `-CtxPerSlot 65536` if the card drives a screen |
 
 ## vLLM on MI300X (experimental)
 
@@ -199,6 +209,7 @@ HonestHarness's notes list eight requirements for a deployment kit (§5.2, K1–
 
 - **Setup stopped partway:** run `setup` again.
 - **Setup says the model doesn't fit:** run it again with a smaller `-CtxPerSlot` or fewer `-Slots`, or use a smaller model.
+- **llama-server killed by the OOM killer** (`journalctl -u lemond` says `oom-kill`): the GPU probably also drives a screen with almost no VRAM free. See "Context size".
 - **Setup waits for apt:** Ubuntu's unattended upgrades hold apt's lock, once for 24 minutes on the test box. Setup waits up to 30 minutes and names the process every 5 minutes.
 - **Server won't start:** `.\leasehold.ps1 ssh`, then `journalctl -u lemond -n 100`.
 - **Port 13305 is busy on your PC** (a local Lemonade, for example): add `-LocalPort 13306` to both `tunnel` and `pi` or `claude`.

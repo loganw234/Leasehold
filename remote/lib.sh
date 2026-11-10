@@ -99,6 +99,20 @@ vram_gb() {
 }
 vram_used_gb() { vram_gb used; }
 
+# True if a screen is connected to one of an AMD GPU's outputs. Such a GPU needs VRAM for the
+# screen too: when the screen asks for some and none is free, the driver moves other buffers into
+# system RAM, which on an 8 GB card got llama-server killed by the OOM killer.
+gpu_drives_display() {
+  local f card
+  for f in /sys/class/drm/card*-*/status; do
+    [[ -r "$f" && "$(cat "$f")" == connected ]] || continue
+    card=${f%/status}
+    card=${card%%-*}
+    [[ "$(cat "$card/device/vendor" 2>/dev/null)" == 0x1002 ]] && return 0
+  done
+  return 1
+}
+
 # One OpenAI-style chat request. Prints the reply; returns non-zero if nothing came back.
 # Reasoning models may answer only in reasoning_content when max_tokens runs out, so either counts.
 smoke_chat() {

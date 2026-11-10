@@ -21,6 +21,9 @@
     status     List your GPU droplets with age and approximate cost (needs doctl).
     bench      Measure generation speed for -Model with one request, then -Concurrency (default 4)
                at once, each -MaxTokens (default 256) long: what -Slots buys.
+    depth      Measure -Model deep into its context, at -Depths tokens (default '8000 32000 64000
+               120000'): time to read the prompt, whether it finds a fact hidden halfway down, and
+               generation speed at that depth; then what a request longer than a slot gets.
     collect    Save the machine's Lemonade records (config, server log, usage per model, model
                revisions, versions) to .\reports\records-<name>-<time>\ on this PC.
     down       Destroy a GPU droplet (needs doctl). Billing stops only when a droplet is destroyed.
@@ -53,7 +56,7 @@
 param(
     [Parameter(Mandatory = $true, Position = 0)]
     [ValidateSet('setup', 'key', 'tunnel', 'pi', 'claude', 'rocm', 'vllm-test', 'logs', 'report', 'ssh',
-        'collect', 'bench', 'status', 'down', 'up', 'grant', 'run', 'revoke')]
+        'collect', 'bench', 'depth', 'status', 'down', 'up', 'grant', 'run', 'revoke')]
     [string]$Command,
 
     [string]$Ip,
@@ -83,9 +86,10 @@ param(
     [string]$DropletId,
     [switch]$NoCollect,
 
-    # bench
+    # bench, depth
     [int]$Concurrency = 4,
     [int]$MaxTokens = 256,
+    [string]$Depths = '8000 32000 64000 120000',
 
     # pi / claude: anything after -- goes to the agent. run: the remote command.
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -542,6 +546,13 @@ switch ($Command) {
         if ($Concurrency -lt 1 -or $MaxTokens -lt 1) { throw '-Concurrency and -MaxTokens must be at least 1.' }
         Send-Scripts
         Invoke-Remote "bash $RemoteDir/bench.sh '$Model' $Concurrency $MaxTokens"
+    }
+
+    'depth' {
+        Assert-SafeValue $Model 'Model'
+        if ($Depths -notmatch '^\s*[1-9][0-9]*(\s+[1-9][0-9]*)*\s*$') { throw "-Depths takes token counts separated by spaces, e.g. '8000 32000'." }
+        Send-Scripts
+        Invoke-Remote "bash $RemoteDir/depth.sh '$Model' $($Depths.Trim())"
     }
 
     'collect' {
