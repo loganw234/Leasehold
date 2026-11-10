@@ -17,6 +17,7 @@ It's the deployment kit that [HonestHarness's research notes](https://github.com
 | `remote/collect.sh` | the remote machine | Gathers Lemonade's records before a lease ends (`collect`, `down`) |
 | `remote/bench.sh` | the remote machine | Times one request, then several at once, against the loaded model (`bench`) |
 | `remote/depth.sh` | the remote machine | Times long prompts and checks the model finds a fact deep in them (`depth`) |
+| `remote/toolcheck.sh` | the remote machine | Checks how reliably the loaded model calls tools (`toolcheck`) |
 | `remote/grant-operator.sh` | the remote machine | Creates the account AI assistants use (`grant`) |
 | `AGENTS.md` | AI assistants | What assistants may do on granted machines, and what to ask first |
 | `docs/FINDINGS.md` | you | What running the kit has shown: measurements, bugs found and fixed, open questions |
@@ -143,7 +144,17 @@ On an RX 7600 with Qwen3.5-4B, four requests at once ran at 150 tokens/s in tota
 
 ## Models
 
-Any model in Lemonade's catalog works, as does a Hugging Face GGUF that Lemonade can pull. On one MI300X (192 GB), up to about 170 GB of weights leaves room for context. Some catalog models, with the download sizes Lemonade lists:
+Any model in Lemonade's catalog works, as does a Hugging Face GGUF that Lemonade can pull. On one MI300X (192 GB), up to about 170 GB of weights leaves room for context.
+
+Before handing a model to agents, check how reliably it calls tools:
+
+```powershell
+.\leasehold.ps1 toolcheck -Model Qwen3.6-35B-A3B-GGUF
+```
+
+It tests choosing the right tool and arguments, leaving tools alone when none is needed, and using a tool's result in the answer, through both the API Pi uses and the one Claude Code uses.
+
+Some catalog models, with the download sizes Lemonade lists:
 
 | Model | Size | Notes |
 |---|---|---|
@@ -168,7 +179,9 @@ The test does three things:
 - Tries Lemonade's default gfx942 vLLM build and the August 2026 nightly on a small model.
 - Puts the first build that works through chat, tool-call and speed tests with `Qwen3.6-35B-A3B-FP8-vLLM-lowconc`.
 
-It runs in place of the packaged server and restarts the packaged server at the end. Options:
+Before renting the droplet, `.\leasehold.ps1 vllm-test -BuildOnly` rehearses the first half on any box: it applies the patch, builds Lemonade and runs the unit test. That took 17 minutes on a 4-core desktop. It catches a patch that no longer applies before the GPU bills.
+
+The test runs in place of the packaged server and restarts the packaged server at the end. Options:
 - `-Pins "<tag> <tag>"` tests other vLLM-ROCm release tags.
 - `-BigModel none` skips the big model.
 - `-KeepDevServer` leaves the patched server running so you can try an agent on vLLM.

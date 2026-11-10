@@ -22,6 +22,8 @@
 #                                                                  (default: Qwen3.6-35B-A3B-FP8-vLLM-lowconc)
 #   KEEP_DEV_SERVER=1  leave the patched server running on port 13305 afterwards, so you can
 #                    point Claude Code at the vLLM model through the tunnel
+#   BUILD_ONLY=1     stop after steps 1 and 2, on any GPU: a rehearsal that the patch still
+#                    applies and builds, before paying for the droplet (needs ~10 GB, no vLLM)
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=lib.sh
@@ -33,6 +35,7 @@ PINS=${PINS:-"builtin $NIGHTLY_GFX942"}
 SMALL_MODEL=${SMALL_MODEL:-Qwen3.5-0.8B-FP16-vLLM}
 BIG_MODEL=${BIG_MODEL-Qwen3.6-35B-A3B-FP8-vLLM-lowconc}
 KEEP_DEV_SERVER=${KEEP_DEV_SERVER:-0}
+BUILD_ONLY=${BUILD_ONLY:-0}
 PATCH=${PATCH:-$HERE/vllm-enable-gfx942.patch}
 
 SRC=/root/lemonade-src
@@ -96,11 +99,17 @@ restore() {
 # ---------------------------------------------------------------------------------------------
 log "Preflight"
 GFX=$(detect_gfx) || die "No AMD GPU found in /sys/class/kfd."
-[[ "$GFX" == gfx942 ]] || die "This test is for gfx942 (MI300X); this GPU is $GFX."
+if [[ "$GFX" != gfx942 ]]; then
+  [[ "$BUILD_ONLY" == 1 ]] ||
+    die "This test is for gfx942 (MI300X); this GPU is $GFX. BUILD_ONLY=1 rehearses the build on any GPU."
+  info "BUILD_ONLY=1 on $GFX: patch, build, unit test and docs only."
+fi
 [[ -f "$PATCH" ]] || die "Patch not found: $PATCH"
 sed -i 's/\r$//' "$PATCH"
 avail_gb=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
-((avail_gb >= 120)) || die "Need about 120 GB free on / for builds, bundles and models (have ${avail_gb} GB)."
+need_gb=120
+[[ "$BUILD_ONLY" == 1 ]] && need_gb=10
+((avail_gb >= need_gb)) || die "Need about $need_gb GB free on / for this (have ${avail_gb} GB)."
 PKG_UNIT=$(lemond_unit)
 
 cat >"$SUMMARY" <<EOF
@@ -112,7 +121,10 @@ EOF
 {
   echo "date (UTC): $(date -u +%FT%TZ)"
   echo "gpu: $GFX"
-  command -v rocminfo >/dev/null && rocminfo 2>/dev/null | grep -E 'Marketing Name:.*(MI|Instinct)' | sort -u | sed 's/^ */rocminfo /'
+  # No match must not end the script (set -e with pipefail): BUILD_ONLY runs on any GPU.
+  if command -v rocminfo >/dev/null; then
+    rocminfo 2>/dev/null | grep -E 'Marketing Name:.*(Instinct|MI[0-9]|Radeon)' | sort -u | sed 's/^ */rocminfo /' || true
+  fi
   echo "kernel: $(uname -r)"
   echo "os: $(. /etc/os-release && echo "$PRETTY_NAME")"
   [[ -r /opt/rocm/.info/version ]] && echo "system rocm: $(cat /opt/rocm/.info/version)"
@@ -181,6 +193,13 @@ else
 fi
 git -C "$SRC" diff >"$REPORT/full.patch"
 git -C "$SRC" diff --stat
+
+if [[ "$BUILD_ONLY" == 1 ]]; then
+  log "BUILD_ONLY=1: stopping before the vLLM runs"
+  cat "$SUMMARY"
+  info "Report: $REPORT (the change with regenerated docs: $REPORT/full.patch)"
+  exit 0
+fi
 
 # ---------------------------------------------------------------------------------------------
 log "Swapping in the patched server"

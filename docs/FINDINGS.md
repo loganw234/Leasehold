@@ -6,6 +6,45 @@ The test machine for the 2026-11-09/10 entries was an Ubuntu 24.04 desktop with 
 
 ---
 
+## 2026-11-10: the vLLM-on-MI300X change, rehearsed on the RX 7600
+
+`vllm-test -BuildOnly` runs the droplet test's first half on any box: patch Lemonade, build it, run the unit test and regenerate the generated docs. It stops before anything needs an MI300X.
+
+**Upstream status.**
+- `lemonade-sdk/lemonade#3669`, which enabled gfx942 and gfx950 for vLLM, was opened and closed by its author within 18 minutes on 2026-09-25. It was a draft and has no comments or reviews.
+- Its description reports that the stable gfx942 vLLM build doesn't start: a `tokenizers`/`transformers` version clash and an undefined torch symbol in `vllm/_C.abi3.so`. It therefore points gfx942 at the nightly build.
+- No later PR takes this up. `main`'s `vllm.h` still leaves gfx942 out, with the same lines our patch changes.
+
+**On the box, against `main` at `14a09e179`:**
+
+| Step | Result |
+|---|---|
+| Patch | applied cleanly: 2 files, 8 lines in, 8 out |
+| Build | 17 minutes, 742 steps, on a 4-core i5-6600K |
+| `test_vllm_cdna_gating` | 44 checks passed, none failed, among them "vllm:rocm gfx942 (MI300X) is advertised installable" |
+| Generated docs | regenerated: `README.md`'s support table and `docs/dev/backends-reference.md` gain gfx942, so the change is 4 files |
+
+The droplet hour can now go straight to the vLLM releases.
+
+**Bug found on the way.**
+- The test's environment step ran `rocminfo | grep 'Marketing Name:.*(MI|Instinct)'`. On a Radeon, nothing matched, and under `set -euo pipefail` the script ended there without a message (`status=1/FAILURE` after "Preflight").
+- An MI300X always matches, so the droplet never showed it.
+- It now tolerates no match, and lists Radeon names too.
+
+**Also changed.** `logs` and `report` work from an account other than root: `report` copies the report out of `/root` with `sudo` before `scp`.
+
+## 2026-11-10: a tool-calling check
+
+`toolcheck` sends a fixed set of requests with three tools (`get_weather`, `convert_currency`, `search_files`):
+- **Choosing a tool.** Five cases need the right tool with the right arguments, for example `amount == 250` from `USD` to `EUR`.
+- **No tool.** Two cases need no tool at all.
+- **Round trip.** One case gives the model a tool's result, which it must use in its answer (18 °C and light rain).
+- **Claude Code's API.** Two of the choosing cases also go through `/v1/messages`.
+
+Each case runs twice with the model's own sampling settings and thinking left on, as an agent would run it.
+
+**Qwen3.5-4B-GGUF: 20 of 20 in 72 s**, including loading the model. The set may be too easy to separate stronger models; the 8 GB model survey will show whether it separates weaker ones.
+
 ## 2026-11-10: filling the context, and a GPU that also drives a screen
 
 The new `depth` command sends prompts of a given size: a made-up weather log with an access code hidden halfway down. It records how long the model took to read the prompt, whether it found the code, and how fast it then generated at that depth. Last, it sends a prompt longer than one slot's context. Qwen3.5-4B-GGUF, one slot:

@@ -6,7 +6,8 @@ export PATH="$PATH:/opt/bin"
 LEMONADE_PORT="${LEMONADE_PORT:-13305}"
 BASE_URL="http://127.0.0.1:${LEMONADE_PORT}"
 
-log()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
+# Each step's heading carries the time since the script started, so a log shows what each step took.
+log()  { printf '\n\033[1;36m==> %s\033[0m  [%d:%02d]\n' "$*" $((SECONDS / 60)) $((SECONDS % 60)); }
 info() { printf '    %s\n' "$*"; }
 warn() { printf '\033[1;33mWARN:\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }

@@ -15,6 +15,7 @@
     rocm       Install ROCm 10.1 and check HIP on your own Ubuntu box (rocm-box\). Run it again
                after each reboot it asks for.
     vllm-test  Start the vLLM-on-MI300X test on the droplet. Runs detached, about an hour.
+               -BuildOnly stops after the patch, build and unit test, on any box: a rehearsal.
     logs       Follow the vLLM test's output.
     report     Copy the vLLM test report to .\reports\ next to this script.
     ssh        Open a shell on the remote machine.
@@ -24,6 +25,8 @@
     depth      Measure -Model deep into its context, at -Depths tokens (default '8000 32000 64000
                120000'): time to read the prompt, whether it finds a fact hidden halfway down, and
                generation speed at that depth; then what a request longer than a slot gets.
+    toolcheck  Check how reliably -Model calls tools: the right tool and arguments, no tool when
+               none is needed, and a tool result used in the answer. Each case -Repeats times.
     collect    Save the machine's Lemonade records (config, server log, usage per model, model
                revisions, versions) to .\reports\records-<name>-<time>\ on this PC.
     down       Destroy a GPU droplet (needs doctl). Billing stops only when a droplet is destroyed.
@@ -56,7 +59,7 @@
 param(
     [Parameter(Mandatory = $true, Position = 0)]
     [ValidateSet('setup', 'key', 'tunnel', 'pi', 'claude', 'rocm', 'vllm-test', 'logs', 'report', 'ssh',
-        'collect', 'bench', 'depth', 'status', 'down', 'up', 'grant', 'run', 'revoke')]
+        'collect', 'bench', 'depth', 'toolcheck', 'status', 'down', 'up', 'grant', 'run', 'revoke')]
     [string]$Command,
 
     [string]$Ip,
@@ -77,6 +80,7 @@ param(
     [string]$Pins,
     [string]$BigModel,
     [switch]$KeepDevServer,
+    [switch]$BuildOnly,
 
     # up / down
     [string]$Name = 'leasehold-mi300x',
@@ -90,6 +94,7 @@ param(
     [int]$Concurrency = 4,
     [int]$MaxTokens = 256,
     [string]$Depths = '8000 32000 64000 120000',
+    [int]$Repeats = 2,
 
     # pi / claude: anything after -- goes to the agent. run: the remote command.
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -413,36 +418,45 @@ switch ($Command) {
     }
 
     'vllm-test' {
-        Assert-Root 'vllm-test'
+        # -BuildOnly rehearses the patch and build on any box; the full test needs the droplet.
+        if (-not $BuildOnly) { Assert-Root 'vllm-test' }
         Send-Scripts
         $setenv = @('--setenv=HOME=/root')
         if ($Pins) { Assert-SafeValue $Pins 'Pins'; $setenv += "--setenv=PINS='$Pins'" }
         if ($BigModel -eq 'none') { $setenv += "--setenv=BIG_MODEL=" }
         elseif ($BigModel) { Assert-SafeValue $BigModel 'BigModel'; $setenv += "--setenv=BIG_MODEL='$BigModel'" }
         if ($KeepDevServer) { $setenv += '--setenv=KEEP_DEV_SERVER=1' }
+        if ($BuildOnly) { $setenv += '--setenv=BUILD_ONLY=1' }
         $unit = 'leasehold-vllm-test'
-        Invoke-Remote ("systemctl reset-failed $unit 2>/dev/null; " +
-            "systemd-run --unit=$unit --collect $($setenv -join ' ') bash $RemoteDir/vllm-gfx942-test.sh")
-        Write-Host 'Started on the droplet (about an hour). Follow it with: leasehold.ps1 logs'
+        Invoke-Remote ("${Sudo}systemctl reset-failed $unit 2>/dev/null; " +
+            "${Sudo}systemd-run --unit=$unit --collect $($setenv -join ' ') bash $RemoteDir/vllm-gfx942-test.sh") -Tty:([bool]$Sudo)
+        if ($BuildOnly) { Write-Host 'Started: patch, build, unit test and docs only (10 to 30 minutes). Follow it with: leasehold.ps1 logs' }
+        else { Write-Host 'Started on the droplet (about an hour). Follow it with: leasehold.ps1 logs' }
         Write-Host 'When it finishes, copy the results with: leasehold.ps1 report'
     }
 
     'logs' {
-        Assert-Root 'logs'
         $ip = Resolve-Ip
         $sshArgs = Get-SshArgs
-        Write-Host 'Ctrl+C stops following; the test keeps running on the droplet.'
-        & ssh @sshArgs -t "$User@$ip" 'tail -n 100 -F /root/vllm-gfx942-report/run.log'
+        Write-Host 'Ctrl+C stops following; the test keeps running.'
+        & ssh @sshArgs -t "$User@$ip" "${Sudo}tail -n 100 -F /root/vllm-gfx942-report/run.log"
     }
 
     'report' {
-        Assert-Root 'report'
         $ip = Resolve-Ip
         $dest = Join-Path $PSScriptRoot ('reports\vllm-' + (Get-Date -Format 'yyyyMMdd-HHmm'))
         New-Item -ItemType Directory -Force -Path $dest | Out-Null
+        $remote = '/root/vllm-gfx942-report'
+        if ($Sudo) {
+            # Another account can't read /root, so copy the report out for scp first.
+            Invoke-Remote ("sudo rm -rf /tmp/vllm-gfx942-report && sudo cp -r $remote /tmp/ && " +
+                "sudo chown -R ${User}: /tmp/vllm-gfx942-report") -Tty
+            $remote = '/tmp/vllm-gfx942-report'
+        }
         $scpArgs = Get-SshArgs
-        & scp @scpArgs -r "$User@${ip}:/root/vllm-gfx942-report" $dest
+        & scp @scpArgs -r "$User@${ip}:$remote" $dest
         if ($LASTEXITCODE -ne 0) { throw 'Copy failed. Has the test written its report yet?' }
+        if ($Sudo) { Invoke-Remote 'rm -rf /tmp/vllm-gfx942-report' }
         Write-Host "Copied to $dest"
         $summary = Join-Path $dest 'vllm-gfx942-report\summary.md'
         if (Test-Path $summary) { Get-Content $summary }
@@ -553,6 +567,13 @@ switch ($Command) {
         if ($Depths -notmatch '^\s*[1-9][0-9]*(\s+[1-9][0-9]*)*\s*$') { throw "-Depths takes token counts separated by spaces, e.g. '8000 32000'." }
         Send-Scripts
         Invoke-Remote "bash $RemoteDir/depth.sh '$Model' $($Depths.Trim())"
+    }
+
+    'toolcheck' {
+        Assert-SafeValue $Model 'Model'
+        if ($Repeats -lt 1) { throw '-Repeats must be at least 1.' }
+        Send-Scripts
+        Invoke-Remote "bash $RemoteDir/toolcheck.sh '$Model' $Repeats"
     }
 
     'collect' {
