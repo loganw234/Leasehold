@@ -14,6 +14,8 @@ It's the deployment kit that [HonestHarness's research notes](https://github.com
 | `remote/setup-lemonade.sh` | the remote machine | Installs Lemonade from its stable PPA, loads a model on the llama.cpp ROCm backend, runs smoke tests |
 | `remote/vllm-gfx942-test.sh` | an MI300X | Builds Lemonade with `vllm-enable-gfx942.patch` and tests which vLLM-ROCm build works on gfx942 |
 | `remote/lib.sh` | the remote machine | Helpers shared by the remote scripts |
+| `remote/grant-operator.sh` | the remote machine | Creates the account AI assistants use (`grant`) |
+| `AGENTS.md` | AI assistants | What assistants may do on granted machines, and what to ask first |
 | `rocm-box/` | your own Ubuntu box | Installs ROCm 10.1 and checks HIP with a small test program; see [its README](rocm-box/README.md) |
 
 ## Requirements
@@ -57,6 +59,37 @@ It's the deployment kit that [HonestHarness's research notes](https://github.com
 Every command also works against any Ubuntu 24.04 machine you can SSH into. Pass your login with `-User` (the default is `root`, the droplet's login); commands that need root then go through `sudo`, which asks for your password. Run `key` first: it adds your SSH public key to the machine, so later commands don't ask for the login password on every connection.
 
 [rocm-box/README.md](rocm-box/README.md) covers installing ROCm 10.1 on a Radeon card with the `rocm` command. After that, `setup`, `tunnel` and `pi` rehearse a droplet session for free. The remembered IP is the last machine you ran `setup`, `rocm` or `up` against, so pass `-Ip` when you switch machines.
+
+## Letting AI assistants use a machine
+
+Run `grant` once per machine, as yourself:
+
+```powershell
+.\leasehold.ps1 grant -Machine rocm-box -Ip <box-ip> -User <your-login>
+```
+
+`grant` does four things:
+- Creates a `leasehold` account on the machine that logs in with your SSH key only and runs `sudo` without a password.
+- Adds it to the GPU and USB device groups.
+- Checks that it works without prompts.
+- Saves the machine as `rocm-box` in `machines.json`, which stays on your PC.
+
+It asks for at most two passwords: your login password, only if your key isn't on the machine yet, and then `sudo`'s.
+
+After that, an assistant can work on the machine without prompts:
+
+```powershell
+.\leasehold.ps1 run -Machine rocm-box -- 'rocminfo | grep -m1 gfx'
+.\leasehold.ps1 rocm -Machine rocm-box
+```
+
+Each `run` is appended to `runs.log`. [AGENTS.md](AGENTS.md) tells assistants what they may do and what to ask you first.
+
+**This gives the account full root on that machine.** Grant it only on a machine you would hand an assistant anyway, with nothing sensitive on it. To take it back:
+
+```powershell
+.\leasehold.ps1 revoke -Machine rocm-box -User <your-login>
+```
 
 ## Several agents at once
 

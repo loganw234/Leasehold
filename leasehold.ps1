@@ -22,9 +22,19 @@
     down       Destroy a GPU droplet (needs doctl). Billing stops only when a droplet is destroyed.
     up         Create the droplet with doctl. Optional; the web console works too.
 
+  For AI assistants (see AGENTS.md):
+    grant      Run once per machine, as yourself: creates a 'leasehold' account that logs in with
+               your SSH key only and runs sudo without a password, and saves the machine under
+               -Machine <name> in machines.json. At most two prompts: your login, then sudo.
+    run        Run one command on a granted machine, never prompting: run -Machine <name> -- '<cmd>'.
+               Each run is appended to runs.log.
+    revoke     Remove the 'leasehold' account and its sudo rule: revoke -Machine <name> -User <you>.
+
   The remote IP is remembered after setup or up, so later commands don't need -Ip.
   -User defaults to root (the droplet). For your own box, pass your login, e.g. -User ubuntu;
   commands that need root then run through sudo, which may ask for your password.
+  -Machine <name> fills in -Ip and -User from machines.json, so any command can target a
+  granted machine without prompts.
 
 .EXAMPLE
   .\leasehold.ps1 setup -Ip 203.0.113.10
@@ -36,11 +46,13 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('setup', 'key', 'tunnel', 'pi', 'claude', 'rocm', 'vllm-test', 'logs', 'report', 'ssh', 'status', 'down', 'up')]
+    [ValidateSet('setup', 'key', 'tunnel', 'pi', 'claude', 'rocm', 'vllm-test', 'logs', 'report', 'ssh',
+        'status', 'down', 'up', 'grant', 'run', 'revoke')]
     [string]$Command,
 
     [string]$Ip,
     [string]$User = 'root',
+    [string]$Machine,
     [string]$Model = 'Qwen3.6-35B-A3B-GGUF',
     [int]$Slots = 1,
     [int]$CtxPerSlot = 131072,
@@ -64,12 +76,41 @@ param(
     [string]$SshKey,
     [string]$DropletId,
 
-    # pi / claude: anything after -- goes to the agent
+    # pi / claude: anything after -- goes to the agent. run: the remote command.
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$Rest
 )
 
 $ErrorActionPreference = 'Stop'
+$Operator = 'leasehold'
+$MachinesFile = Join-Path $PSScriptRoot 'machines.json'
+$RunLog = Join-Path $PSScriptRoot 'runs.log'
+$script:Batch = $false
+
+# machines.json maps a machine's name to its address and the account assistants use there.
+function Read-Machines {
+    $machines = [ordered]@{}
+    if (Test-Path $MachinesFile) {
+        $json = Get-Content $MachinesFile -Raw | ConvertFrom-Json
+        foreach ($p in $json.PSObject.Properties) { $machines[$p.Name] = $p.Value }
+    }
+    return $machines
+}
+
+# -Machine fills in -Ip and -User. grant creates the entry, so for grant it only names it.
+if ($Machine -and $Command -ne 'grant') {
+    $entry = (Read-Machines)[$Machine]
+    if (-not $entry) {
+        throw "No machine named '$Machine' in machines.json. Its owner adds it with: leasehold.ps1 grant -Machine $Machine -Ip <address> -User <login>"
+    }
+    if (-not $Ip) { $Ip = $entry.ip }
+    if (-not $PSBoundParameters.ContainsKey('User')) {
+        $User = $entry.user
+        # The operator account logs in with a key and never prompts, so fail fast instead of waiting.
+        $script:Batch = $true
+    }
+}
+
 if ($User -notmatch '^[a-z_][a-z0-9_-]*$') { throw "'$User' is not a valid Linux user name." }
 if ($User -eq 'root') { $RemoteDir = '/root/leasehold'; $Sudo = '' } else { $RemoteDir = "/home/$User/leasehold"; $Sudo = 'sudo ' }
 $RemotePort = 13305
@@ -92,7 +133,25 @@ function Get-SshArgs {
     # Droplet IPs get reused with new host keys, so keep their keys out of your main known_hosts.
     if ($KnownHosts -notmatch '\s') { $a += @('-o', "UserKnownHostsFile=$KnownHosts") }
     if ($Identity) { $a += @('-i', $Identity) }
+    if ($script:Batch) { $a += @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15') }
     return $a
+}
+
+function Get-PublicKey {
+    if ($Identity) { $pubPath = "$Identity.pub" } else { $pubPath = Join-Path $env:USERPROFILE '.ssh\id_ed25519.pub' }
+    if (-not (Test-Path $pubPath)) { throw "No public key at $pubPath. Create one with: ssh-keygen -t ed25519" }
+    $pub = (Get-Content $pubPath -Raw).Trim()
+    # One key on one line, with no quotes, so it can sit inside a single-quoted remote command.
+    if ($pub -notmatch '^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp\d+) [A-Za-z0-9+/=]+( [^''"\r\n]*)?$') {
+        throw "$pubPath doesn't look like a single SSH public key."
+    }
+    return $pub
+}
+
+# The remote command that adds a key to the login account's authorized_keys, once.
+function Get-AddKeyCommand([string]$Pub) {
+    return "umask 077; mkdir -p ~/.ssh && touch ~/.ssh/authorized_keys && " +
+        "{ grep -qxF '$Pub' ~/.ssh/authorized_keys || echo '$Pub' >> ~/.ssh/authorized_keys; }"
 }
 
 function Invoke-Remote([string]$RemoteCommand, [switch]$Tty) {
@@ -336,18 +395,81 @@ switch ($Command) {
 
     'key' {
         $ip = Resolve-Ip
-        if ($Identity) { $pubPath = "$Identity.pub" } else { $pubPath = Join-Path $env:USERPROFILE '.ssh\id_ed25519.pub' }
-        if (-not (Test-Path $pubPath)) { throw "No public key at $pubPath. Create one with: ssh-keygen -t ed25519" }
-        $pub = (Get-Content $pubPath -Raw).Trim()
-        # One key on one line, with no quotes, so it can sit inside the single-quoted remote command.
-        if ($pub -notmatch '^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp\d+) [A-Za-z0-9+/=]+( [^''"\r\n]*)?$') {
-            throw "$pubPath doesn't look like a single SSH public key."
-        }
-        Write-Host "Adding $pubPath to $User@${ip}'s authorized_keys. SSH asks for the password one last time."
-        Invoke-Remote ("umask 077; mkdir -p ~/.ssh && touch ~/.ssh/authorized_keys && " +
-            "{ grep -qxF '$pub' ~/.ssh/authorized_keys || echo '$pub' >> ~/.ssh/authorized_keys; }")
+        $pub = Get-PublicKey
+        Write-Host "Adding your public key to $User@${ip}'s authorized_keys. SSH asks for the password one last time."
+        Invoke-Remote (Get-AddKeyCommand $pub)
         Set-Content -Path $IpFile -Value $ip
         Write-Host 'Done. Later commands log in with your key; sudo still asks for your password once per run.'
+    }
+
+    'grant' {
+        if (-not $Machine -or $Machine -notmatch '^[A-Za-z0-9._-]+$') {
+            throw 'grant needs -Machine <name>: the name assistants will use for this machine, e.g. -Machine rocm-box.'
+        }
+        if ($User -eq $Operator) { throw "Run grant as yourself: -User <your login on the machine>, not $Operator." }
+        $ip = Resolve-Ip
+        $pub = Get-PublicKey
+        Write-Host "This lets AI assistants use $ip through a '$Operator' account that logs in with your SSH key only"
+        Write-Host 'and runs sudo without a password. Expect at most two prompts: your login password, only if'
+        Write-Host 'your key is not on the machine yet, then sudo.'
+        Invoke-Remote (Get-AddKeyCommand $pub)
+        $scpArgs = Get-SshArgs
+        & scp @scpArgs (Join-Path $PSScriptRoot 'remote\grant-operator.sh') "${User}@${ip}:leasehold-grant-operator.sh"
+        if ($LASTEXITCODE -ne 0) { throw 'Upload failed.' }
+        Invoke-Remote ("sed -i 's/\r`$//' leasehold-grant-operator.sh && " +
+            "${Sudo}bash leasehold-grant-operator.sh $Operator '$pub'; rc=`$?; rm -f leasehold-grant-operator.sh; exit `$rc") -Tty
+
+        # Prove it the way an assistant will use it: key login, no prompts, sudo without a password.
+        $script:Batch = $true
+        $sshArgs = Get-SshArgs
+        $out = @(& ssh @sshArgs "$Operator@$ip" 'sudo -n true && hostname && ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub')
+        if ($LASTEXITCODE -ne 0 -or $out.Count -lt 2) { throw "The '$Operator' account did not work without prompts: $($out -join ' ')" }
+        $machines = Read-Machines
+        $machines[$Machine] = [ordered]@{
+            ip       = $ip
+            user     = $Operator
+            hostname = $out[0]
+            host_key = ($out[1] -split ' ')[1]
+            granted  = (Get-Date -Format 'yyyy-MM-dd')
+            by       = $User
+            notes    = ''
+        }
+        Write-JsonFile $MachinesFile $machines
+        Set-Content -Path $IpFile -Value $ip
+        Write-Host "Granted. $Machine is $($out[0]) at $ip, host key $(($out[1] -split ' ')[1])."
+        Write-Host "Assistants can now run: leasehold.ps1 run -Machine $Machine -- '<command>'"
+        Write-Host "To take it back: leasehold.ps1 revoke -Machine $Machine -User $User"
+    }
+
+    'run' {
+        $remoteCmd = ($Rest -join ' ').Trim()
+        if (-not $remoteCmd) { throw "run needs a command after --, for example: leasehold.ps1 run -Machine rocm-box -- 'uname -a'" }
+        $ip = Resolve-Ip
+        $script:Batch = $true
+        $sshArgs = Get-SshArgs
+        $started = Get-Date
+        & ssh @sshArgs "$User@$ip" $remoteCmd
+        $code = $LASTEXITCODE
+        $label = $Machine
+        if (-not $label) { $label = $ip }
+        $line = '{0}	{1}	{2}@{3}	exit {4}	{5}' -f $started.ToString('yyyy-MM-ddTHH:mm:ss'), $label, $User, $ip, $code, $remoteCmd
+        Add-Content -Path $RunLog -Value $line -Encoding UTF8
+        exit $code
+    }
+
+    'revoke' {
+        if (-not $PSBoundParameters.ContainsKey('User') -or $User -eq $Operator) {
+            throw 'Run revoke as yourself: -User <your login on the machine>.'
+        }
+        $ip = Resolve-Ip
+        Invoke-Remote ("${Sudo}sh -c 'rm -f /etc/sudoers.d/$Operator; pkill -KILL -u $Operator; " +
+            "userdel -r $Operator 2>/dev/null; true'") -Tty
+        $machines = Read-Machines
+        if ($Machine -and $machines.Contains($Machine)) {
+            $machines.Remove($Machine)
+            Write-JsonFile $MachinesFile $machines
+        }
+        Write-Host "Revoked: the '$Operator' account and its sudo rule are gone from $ip."
     }
 
     'status' {

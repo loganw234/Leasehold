@@ -2,3 +2,5 @@
 .known_hosts
 reports/
 pi-agent/
+machines.json
+runs.log
