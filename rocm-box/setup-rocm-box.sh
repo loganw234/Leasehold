@@ -12,6 +12,7 @@
 set -euo pipefail
 
 AMDGPU_INSTALL_URL='https://repo.radeon.com/amdgpu-install/31.60/ubuntu/noble/amdgpu-install_31.60.316000-1_all.deb'
+ROCM_SERIES=10.1
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 log()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
@@ -32,6 +33,15 @@ TARGET_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
 find_rocm_bin() {
   command -v "$1" 2>/dev/null ||
     find /opt -maxdepth 4 -type f -name "$1" -perm -u+x 2>/dev/null | sort -V | tail -1
+}
+
+# amdgpu-install's rocm use case installs the runtime and libraries but not the HIP headers.
+# The core SDK adds them (and the libraries' dev files); developer tools add rocprofv3 and rocgdb.
+# About 3.3 GB.
+install_sdk() {
+  log "Installing the ROCm ${ROCM_SERIES} core SDK and developer tools (HIP headers, rocprofv3, rocgdb)"
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
+    "amdrocm-core-sdk${ROCM_SERIES}" "amdrocm-developer-tools${ROCM_SERIES}" >/dev/null
 }
 
 ROCMINFO=$(find_rocm_bin rocminfo || true)
@@ -72,6 +82,7 @@ if [[ -z "$ROCMINFO" ]]; then
 
   log "Installing the AMD GPU driver and ROCm (several minutes)"
   amdgpu-install -y --usecase=rocm,graphics --gfxversion=auto
+  install_sdk
 
   if [[ "$TARGET_USER" != root ]]; then
     usermod -a -G render,video "$TARGET_USER"
@@ -101,6 +112,8 @@ if [[ "$TARGET_USER" != root ]] && ! id -nG "$TARGET_USER" | grep -qw render; th
 fi
 
 log "Building and running hip-smoke/vector_add.hip"
+# Boxes installed before the SDK step was added have hipcc but no HIP headers.
+if [[ ! -e /opt/rocm/include/hip/hip_runtime.h ]]; then install_sdk; fi
 HIPCC=$(find_rocm_bin hipcc || true)
 [[ -n "$HIPCC" ]] || die "hipcc not found under PATH or /opt. Is the ROCm SDK installed (amdgpu-install --usecase=rocm)?"
 "$HIPCC" --version | head -3 | sed 's/^/    /'
