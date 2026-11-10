@@ -102,9 +102,12 @@ GTT (system memory mapped for the GPU) stayed at 766 MB throughout, so the CPU-s
   - `wait_for_apt` now waits up to 30 minutes. Every 5 minutes it names the process holding the lock: `Waiting for unattended-upgr to let go of apt (5 min so far)...`.
   - `apt_update` waits once, then retries.
   - A stub test checked a lock held for 3 and 70 checks (released, no warning) and one never released (one warning at 30 minutes).
-- **The GPU driver module was rebuilt.**
+- **The GPU driver module was rebuilt, and works.**
   - DKMS built amdgpu for the new kernel during the upgrade: `dkms status` lists amdgpu 7.1.9 for both 7.0.0-30 and 7.0.0-42.
-  - The box still runs 7.0.0-30 and reports a restart required. ROCm on 7.0.0-42 is unchecked until it reboots.
+  - The box rebooted onto 7.0.0-42 and was back within a minute. The DKMS module loaded (`updates/dkms/amdgpu.ko`, 7.1.9.31600000).
+  - `rocm` passed: `rocminfo`, `amd-smi` (ROCm 10.1.0), the HIP test on the RX 7600 and the gfx942 cross-build.
+  - Lemonade's setup and smoke tests passed at 57.1 tok/s.
+  - The boot log has no amdgpu errors, only two display `REG_WAIT timeout` messages from mode setting.
 - **On a droplet**, the same timers can fire soon after first boot. Once an upgrade is running, waiting is the only safe choice, at $1.99/hour.
 
 ## 2026-11-10: an Ubuntu mirror mid-sync stopped setup
@@ -262,5 +265,4 @@ On Ubuntu, the Lemonade package keeps:
 - Can Lemonade reuse a system ROCm 10.1 instead of downloading about 2 GB of its own?
 - Should long remote installs run detached (`systemd-run`) so a dropped SSH session can't stop them halfway?
 - The PPA release pins llama.cpp b11836, while Lemonade's main branch is on b12109. Does the difference matter for the models in use?
-- Does ROCm 10.1 work on the 7.0.0-42 kernel the unattended upgrade installed? It stays unchecked until the box reboots.
 - Should setup stop Ubuntu's apt timers on a droplet, so an upgrade soon after first boot can't hold apt while the GPU bills?
