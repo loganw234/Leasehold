@@ -73,9 +73,13 @@ fi
   if [[ -s "$R/logs/lemond.journal.log" ]]; then
     grep 'Inference completed' "$R/logs/lemond.journal.log" |
       sed -E 's/.*model=([^,]+), tokens=[0-9]+ \(in=([0-9]+), out=([0-9]+)\).*tps=([0-9.]+).*/\1 \2 \3 \4/' |
-      awk '{ n[$1]++; i[$1] += $2; o[$1] += $3; t[$1] += $4; c++ }
+      # Lemonade logs tps=0.00 for every vLLM request, so only requests that report a speed count.
+      awk '{ n[$1]++; i[$1] += $2; o[$1] += $3; if ($4 > 0) { t[$1] += $4; k[$1]++ }; c++ }
            END {
-             for (m in n) printf "  %s: %d requests, %d tokens in, %d out, %.1f tok/s on average\n", m, n[m], i[m], o[m], t[m] / n[m]
+             for (m in n) {
+               s = k[m] ? sprintf("%.1f tok/s on average", t[m] / k[m]) : "speed not reported"
+               printf "  %s: %d requests, %d tokens in, %d out, %s\n", m, n[m], i[m], o[m], s
+             }
              if (c == 0) print "  none recorded"
            }'
   else

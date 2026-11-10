@@ -6,6 +6,35 @@ The test machine for the 2026-11-09/10 entries was an Ubuntu 24.04 desktop with 
 
 ---
 
+## 2026-11-10: setup from nothing, as on a new droplet
+
+**The wipe.**
+- Lemonade was removed from the box completely:
+  - the package, purged;
+  - its `lemonade` system user;
+  - `/var/lib/lemonade` and `/var/cache/lemonade` (20 GB of models and backends);
+  - the PPA's source file;
+  - the three libraries only it used.
+- `apt autoremove` would also have removed three unrelated video-decode packages, so it wasn't used.
+- `collect` saved the records first, as `down` does.
+
+`setup -Model Qwen3.5-4B-GGUF -CtxPerSlot 65536` then ran from scratch, with no errors: 347 s from the PC, 5:44 on the box's clock. Step headings now show the time since the start:
+
+| Step | Took |
+|---|---|
+| Install Lemonade from the PPA (add the source with `-n`, update apt, install) | 16 s |
+| Start the service | 8 s |
+| Configure | 6 s |
+| The llama.cpp ROCm backend: 0.3 GB, plus its own ROCm 10.1 runtime as 2.0 GB of wheels | 1:49 |
+| Download Qwen3.5-4B-GGUF, 3.3 GB | 3:03 |
+| Load (65,536 tokens, 7.0 of 8.6 GB) | 5 s |
+| Smoke tests (chat, tool call, 57.4 tok/s) | 17 s |
+
+- **Downloads.** About 5 of the 5:44 minutes went on downloads, at about 18 MB/s on a home connection. On a droplet the other steps should take a minute or two, plus the model's download.
+- **First live runs.** Adding the PPA with `-n` and the retrying update after it ran cleanly, as did a first-time backend install and a first pinned load.
+- **Usage across installs.** `collect` reported usage across the old and new installs, because the systemd journal outlives the package. A new droplet's journal starts empty.
+- **vLLM speed.** Lemonade's telemetry logs `ttft=0.00s, tps=0.00` for every vLLM request, so `collect` averaged vLLM's speed to 0.0 tok/s. It now averages only requests that report a speed, and says "speed not reported" otherwise.
+
 ## 2026-11-10: the vLLM-on-MI300X change, rehearsed on the RX 7600
 
 `vllm-test -BuildOnly` runs the droplet test's first half on any box: patch Lemonade, build it, run the unit test and regenerate the generated docs. It stops before anything needs an MI300X.
