@@ -6,6 +6,55 @@ The test machine for the 2026-11-09/10 entries was an Ubuntu 24.04 desktop with 
 
 ---
 
+## 2026-11-10: confining agents: localhost-only isn't "no network"
+
+The agent trial's confinement (below) was rebuilt for a longer run's agents on the same box. The launcher and its gate are kept outside this repository, with the owner's notes.
+
+**What localhost-only let through.**
+- **Every service on loopback.** `IPAddressAllow=localhost` admits all of 127.0.0.0/8, so a confined process can reach any service listening on loopback, and some of those act on the network for whoever asks. A probe from inside the trial's confinement reached:
+  - Lemonade's whole API on 13305, including loading and unloading models, and the endpoint that pulls models from Hugging Face;
+  - llama-server's own port, Lemonade's second port, the print server and sshd;
+  - systemd-resolved's DNS stub at 127.0.0.53, so names resolved even with every outside address blocked;
+  - a file-sync daemon's local web interface. When no GUI password is set, any local process can use its REST API to share a folder with any remote device.
+- **Unix sockets.** `IPAddressAllow` doesn't cover them at all. D-Bus, systemd-resolved's varlink socket, Avahi and snapd's API each make requests for an unprivileged caller.
+
+**What replaced it.**
+- **No network of its own.** Each agents' service gets `PrivateNetwork=yes`: a network namespace that holds only its own loopback.
+- **One way out: a small gate.** It is a Python service of its own, under a dynamic user, listening on a Unix socket.
+  - Inside the agents' service, `systemd-socket-activate` and `systemd-socket-proxyd` make the gate reachable as `http://127.0.0.1:13305`, so Pi's provider config doesn't change.
+  - The gate passes only `GET /v1/models` and `POST /v1/chat/completions`, and answers 403 to anything else.
+- **Hidden sockets.** `InaccessiblePaths=` hides the D-Bus, systemd-resolved, Avahi, snapd and CUPS sockets.
+- **The probe from inside, afterwards:**
+  - the model answered through the gate;
+  - Lemonade's health and pull endpoints got 403;
+  - github.com and 1.1.1.1 were blocked, and name lookups failed;
+  - every other localhost port (22, 53, 631, 8001, 8384, 9000, 22000) was closed.
+- **A usage log the agents can't reach.** The gate logs each request with:
+  - the agent's service name, read from the connecting process's cgroup via `SO_PEERCRED`;
+  - the model;
+  - prompt tokens with the cached share, and output tokens;
+  - the seconds taken.
+
+  llama.cpp's streamed usage object nests `prompt_tokens_details`, which a flat regular expression misses. Parse it as JSON (`json.JSONDecoder.raw_decode` from the last `"usage"` key).
+
+**The CPU limit, moved from Pi to the commands it runs.**
+- **Pi itself would be killed.** `LimitCPU=` is per process, and Pi's own process lives for the whole session, so its CPU time keeps adding up. Five minutes suited the trial's half-hour tasks, but a long session would end with Pi killed.
+- **A wrapper shell caps the commands instead.** If `settings.json` sets `shellPath`, Pi 1.5.0 runs every bash command as `<shellPath> -c '<command>'`. A wrapper that sets the limit and then execs bash caps each command and leaves Pi unlimited.
+- **Put the soft limit below the hard one.**
+  - With equal limits, a runaway command ends with SIGKILL: bash prints "Killed", exit 137, which reads like running out of memory.
+  - A lower soft limit sends SIGXCPU first: "CPU time limit exceeded", exit 152.
+  - Set the soft limit first. Lowering the hard limit below the current soft one (unlimited) fails with "Invalid argument".
+- **Measured:** a 3-second cap ended an endless loop after 3 s with exit 152. Ubuntu's crash reporter wrote no report.
+
+**Smaller things.**
+- **`PI_OFFLINE=1`** turns off Pi's own network features: the version check and the model-list refresh.
+- **What Pi writes.** With `PI_CODING_AGENT_DIR` set, Pi 1.5.0 wrote only `auth.json`, `models-store.json` and its sessions there, besides the launcher's `models.json` and `settings.json`. It created nothing else in the home directory.
+- **What Pi loads by itself,** going by the names in its bundle:
+  - from the working folder and every folder above it: `AGENTS.md`, `AGENTS.override.md` and `CLAUDE.md`;
+  - from its agent directory: `SYSTEM.md`, `APPEND_SYSTEM.md`, extensions, skills, prompts and `mcp.json`.
+
+  The launcher refuses to start a session while one of these sits above the project or in the agent's directory.
+
 ## 2026-11-10: models for an 8 GB card
 
 Each model was downloaded, loaded at 32,768 tokens with every layer on the GPU, timed with setup's speed test and put through `toolcheck`. The candidates are the tool-calling models in Lemonade's catalog that fit 8 GB:
@@ -55,7 +104,7 @@ Each model was downloaded, loaded at 32,768 tokens with every layer on the GPU, 
 - **Every tool call was well formed.** The tool errors Pi recorded (26 in run 1) were bash commands that failed, such as failing tests and compiler errors.
 - **Pi's bash tool has no timeout.**
   - With Qwen3.5-4B-MTP, the agent twice edited code into an endless loop: a binary search, then `clz64`. The test run then spun at 100% CPU until the task's 25-minute limit stopped Pi, with the agent waiting on it the whole time.
-  - The agents' service now sets `LimitCPU=300`, which kills any single process after five minutes of CPU, and the agent gets the error back.
+  - The agents' service now sets `LimitCPU=300`, which kills any single process after five minutes of CPU, and the agent gets the error back. For a session longer than the trial's, that limit would also kill Pi itself. The entry above moves it to the commands Pi runs.
   - Rerun with the limit, the MTP model passed 5 of 6. The sixth ran out of time one case short of passing (`INT64_MAX / INT64_MIN`).
 - **Multi-token prediction pays off in agent use.** Over a whole run, Qwen3.5-4B-MTP produced 77.7 output tokens per second of model time, against 52.6 for Qwen3.5-4B: 1.48 times as fast. Task times still varied more with each run's path than with the model.
 - **The confinement held.** These systemd properties gave the agent only what it needed:
@@ -64,6 +113,8 @@ Each model was downloaded, loaded at 32,768 tokens with every layer on the GPU, 
   - `PrivateTmp`, `NoNewPrivileges` and `MemoryMax=3G`.
 
   A probe confirmed Lemonade answered on localhost while the internet was blocked. `/etc` and the grader were read-only, the home was writable, and `sudo` was refused. This is one way to enforce the clean-room block on the agents' machine without a Pi extension.
+
+  **Later found incomplete:** allowing localhost reaches every local service, and some of them act on the network for the agent. The entry above replaces it with a private network namespace and a gate.
 
 ## 2026-11-10: setup from nothing, as on a new droplet
 
