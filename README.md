@@ -163,6 +163,7 @@ Some catalog models, with the download sizes Lemonade lists:
 | `gpt-oss-120b-mxfp-GGUF` | 63 GB | Reasoning and tool calling |
 | `Qwen3.5-122B-A10B-GGUF` | 78 GB | Still fits a 128 GB Strix Halo |
 | `Qwen3.5-4B-GGUF` | 3.6 GB | For 8 GB cards; use `-CtxPerSlot 65536` if the card drives a screen |
+| `Qwen3.5-4B-MTP-GGUF` | 3.7 GB | The same model with multi-token prediction: 1.5 times as fast on an RX 7600 |
 
 ## vLLM on MI300X (experimental)
 

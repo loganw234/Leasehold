@@ -6,6 +6,28 @@ The test machine for the 2026-11-09/10 entries was an Ubuntu 24.04 desktop with 
 
 ---
 
+## 2026-11-10: models for an 8 GB card
+
+Each model was downloaded, loaded at 32,768 tokens with every layer on the GPU, timed with setup's speed test and put through `toolcheck`. The candidates are the tool-calling models in Lemonade's catalog that fit 8 GB:
+
+| Model | Download | VRAM at 32,768 tokens | Speed | `toolcheck` |
+|---|---|---|---|---|
+| Qwen3.5-4B-GGUF | 3.3 GB | 5.8 GB | 57.3 tok/s | 20/20 |
+| Qwen3.5-4B-MTP-GGUF | 3.4 GB, 203 s | 6.3 GB | 86.8 tok/s | 20/20 |
+| granite-4.0-h-tiny-GGUF | 4.0 GB, 263 s | 5.5 GB | 81.2 tok/s | 20/20 |
+| Qwen3-4B-Instruct-2507-GGUF | 2.3 GB, 146 s | 8.2 GB | 70.0 tok/s | 18/20 |
+| K2-Horizon-7B-GGUF | 5.2 GB, 322 s | doesn't fit: needs 4,608 MiB of KV cache alone; 8.4 GB at 16,384 | 42.3 tok/s | 20/20 |
+
+- **Qwen3.5-4B-MTP is 1.5 times as fast** as the plain model, with the same tool calling and only 0.5 GB more VRAM. Lemonade loads it with `--spec-type draft-mtp`: multi-token prediction drafts tokens that the model then checks. At 65,536 tokens it ran at 90.5 tok/s and used 7.6 GB.
+- **The models' design sets how much context fits.**
+  - Qwen3.5 and granite-4.0-h are hybrids, so only some of their layers keep a KV cache.
+  - Qwen3-4B-Instruct-2507 and K2-Horizon-7B use full attention in every layer. At 32,768 tokens, Qwen3-4B already fills the card, and K2-Horizon doesn't fit at all.
+  - The failed K2-Horizon load is the case setup now explains. llama.cpp logged `allocating 4608.00 MiB on device 0: cudaMalloc failed: out of memory`.
+- **`toolcheck` barely separates these models.**
+  - The only misses came from Qwen3-4B-Instruct-2507, which doesn't reason first: it answered 401 for 17 × 23 both times.
+  - The cases are simple single calls. Harder ones would be needed to rank models: several tools in sequence, long arguments, or a tool's error to recover from.
+- **Sampler settings.** Lemonade has per-model sampler settings for the Qwen models (temperature 0.6 and top-p 0.85 for Qwen3-4B-Instruct-2507), but none for granite or K2-Horizon, which run on llama.cpp's defaults.
+
 ## 2026-11-10: Pi agents on the RX 7600: how much context each agent needs
 
 **The trial.**
