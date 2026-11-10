@@ -18,6 +18,7 @@ It's the deployment kit that [HonestHarness's research notes](https://github.com
 | `remote/bench.sh` | the remote machine | Times one request, then several at once, against the loaded model (`bench`) |
 | `remote/depth.sh` | the remote machine | Times long prompts and checks the model finds a fact deep in them (`depth`) |
 | `remote/toolcheck.sh` | the remote machine | Checks how reliably the loaded model calls tools (`toolcheck`) |
+| `remote/hip-test.sh`, `remote/hip-test.hip` | the remote machine | Builds and runs a small HIP test on the machine's GPUs (`hip-test`) |
 | `remote/grant-operator.sh` | the remote machine | Creates the account AI assistants use (`grant`) |
 | `AGENTS.md` | AI assistants | What assistants may do on granted machines, and what to ask first |
 | `docs/FINDINGS.md` | you | What running the kit has shown: measurements, bugs found and fixed, open questions |
@@ -175,6 +176,25 @@ Some catalog models, with the download sizes Lemonade lists:
 | `Qwen3.5-122B-A10B-GGUF` | 78 GB | Still fits a 128 GB Strix Halo |
 | `Qwen3.5-4B-GGUF` | 3.6 GB | For 8 GB cards; use `-CtxPerSlot 65536` if the card drives a screen |
 | `Qwen3.5-4B-MTP-GGUF` | 3.7 GB | The same model with multi-token prediction: 1.5 times as fast on an RX 7600 |
+
+## Checking HIP
+
+To check that HIP code builds and runs on a machine's GPUs, whether a droplet or your own box:
+
+```powershell
+.\leasehold.ps1 hip-test
+```
+
+- **It builds `remote/hip-test.hip` with the machine's `hipcc`** for every GPU target the driver lists, then runs it on every GPU.
+  - It runs three kernels, each checked exactly against the CPU:
+    1. a vector add;
+    2. a SAXPY with fused multiply-adds;
+    3. an integer sum built from wavefront shuffles, shared memory and a 64-bit atomic. A wavefront is 32 lanes on an RX 7600 and 64 on an MI300X, and the sum has to be right on both.
+  - It then times the vector add for a rough memory bandwidth.
+- **Elsewhere than an MI300X,** it also builds the program for gfx942 without running it, so a droplet's first run holds no surprises.
+- **If the HIP headers are missing,** as after `amdgpu-install`'s rocm use case, it installs ROCm's core SDK first, which is a few GB.
+
+On an RX 7600, it built in 2 to 3 s and passed in about 6 s. The vector add ran at 246 GB/s, against the card's 288 GB/s peak.
 
 ## vLLM on MI300X (experimental)
 

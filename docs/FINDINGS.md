@@ -6,6 +6,33 @@ The test machine for the 2026-11-09/10 entries was an Ubuntu 24.04 desktop with 
 
 ---
 
+## 2026-11-10: a HIP test for any ROCm machine
+
+`hip-test` builds `remote/hip-test.hip` for every GPU target the driver lists, then runs it. The point is to know HIP works on a droplet within a minute of renting it, with the same command already proven on the box.
+
+**On the RX 7600** (ROCm 10.1.0, HIP 7.16.26385, AMD clang 24.0.0git):
+- `hipcc -O2 --offload-arch=gfx1102` built the test in 2–3 s. The same source also built for gfx942, which wasn't run.
+- **Results:**
+
+  | Check | Result |
+  |---|---|
+  | vector add, 16,777,216 floats, exact | ok |
+  | SAXPY with `fmaf`, against the host's `std::fma`, exact | ok |
+  | integer sum: wavefront shuffles, shared memory and a 64-bit atomic | ok |
+  | vector add bandwidth, 20 runs | 246 GB/s, 0.82 ms each; the card's peak is 288 GB/s |
+
+  The whole command took about 6 s, while Lemonade held 6.6 of the card's 8.6 GB.
+- **The test sizes itself to a quarter of the free VRAM,** because the GPU may be serving a model at the same time.
+
+**Things that would have misled:**
+- **HIP's count of compute units on RDNA.** `hipDeviceProp_t::multiProcessorCount` is 16 on the RX 7600, while `rocminfo` lists 32 compute units with 2 SIMDs each. HIP counts an RDNA work-group processor, which is two compute units, as one. The test prints "multiprocessors" for that reason.
+- **`grep -m1` under `pipefail`.** `hipcc --version | grep -m1 ... || echo unknown` printed both the version and "unknown". Once grep has its match it stops reading, `hipcc` dies of SIGPIPE, and `pipefail` makes the pipeline fail. The fix is to capture the output first, then grep it.
+- **`hipRuntimeGetVersion`** returns 71626385 for 7.16.26385. It encodes the version as major × 10^7 + minor × 10^5 + patch.
+
+**Not tested yet:**
+- **Running on a gfx942.** The MI300X build only compiled here.
+- **Installing the headers.** On a build that fails with `hip_runtime.h' file not found`, the script installs `amdrocm-core-sdk<series>`, or `rocm-hip-sdk` on older ROCm, through apt. It does this as root or with passwordless sudo, then builds again. The box already has the headers, so that path hasn't run.
+
 ## 2026-11-10: confining agents: localhost-only isn't "no network"
 
 The agent trial's confinement (below) was rebuilt for a longer run's agents on the same box. The launcher and its gate are kept outside this repository, with the owner's notes.

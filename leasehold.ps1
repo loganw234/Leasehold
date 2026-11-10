@@ -27,6 +27,9 @@
                generation speed at that depth; then what a request longer than a slot gets.
     toolcheck  Check how reliably -Model calls tools: the right tool and arguments, no tool when
                none is needed, and a tool result used in the answer. Each case -Repeats times.
+    hip-test   Build and run a small HIP test on the machine's GPUs: three kernels checked
+               against the CPU, and a rough memory bandwidth. On a GPU that isn't an MI300X it
+               also builds the test for gfx942, so a droplet's first run holds no surprises.
     collect    Save the machine's Lemonade records (config, server log, usage per model, model
                revisions, versions) to .\reports\records-<name>-<time>\ on this PC.
     down       Destroy a GPU droplet (needs doctl). Billing stops only when a droplet is destroyed.
@@ -61,7 +64,7 @@
 param(
     [Parameter(Mandatory = $true, Position = 0)]
     [ValidateSet('setup', 'key', 'tunnel', 'pi', 'claude', 'rocm', 'vllm-test', 'logs', 'report', 'ssh',
-        'collect', 'bench', 'depth', 'toolcheck', 'status', 'down', 'up', 'grant', 'run', 'revoke', 'note')]
+        'collect', 'bench', 'depth', 'toolcheck', 'hip-test', 'status', 'down', 'up', 'grant', 'run', 'revoke', 'note')]
     [string]$Command,
 
     [string]$Ip,
@@ -595,6 +598,12 @@ switch ($Command) {
         if ($Repeats -lt 1) { throw '-Repeats must be at least 1.' }
         Send-Scripts
         Invoke-Remote "bash $RemoteDir/toolcheck.sh '$Model' $Repeats"
+    }
+
+    'hip-test' {
+        # Runs as the login account: root on a droplet, or an account in the render group.
+        Send-Scripts
+        Invoke-Remote "bash $RemoteDir/hip-test.sh"
     }
 
     'collect' {
