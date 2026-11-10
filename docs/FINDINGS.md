@@ -157,6 +157,12 @@ The new `depth` command sends prompts of a given size: a made-up weather log wit
 - The ROCm box now runs with `-CtxPerSlot 65536`.
 - A droplet's MI300X drives no screen.
 
+**The desktop is now off on the box.**
+- On the owner's go-ahead, GDM was stopped and the box set to boot to text mode (`systemctl set-default multi-user.target`).
+- That freed 0.6 GB of VRAM: from 7.9 to 7.3 GB with Qwen3.5-4B-MTP loaded at 65,536 tokens. The kernel logged no errors during the switch.
+- The HDMI cable is still plugged in, so the connector still reads `connected`. Setup's check therefore now also requires a running display server (a display manager, or a compositor such as `gnome-shell` or `Xwayland`). A text console alone takes a few MB and didn't cause trouble: the 120K prompt passed with GDM stopped.
+- To bring the desktop back: `sudo systemctl set-default graphical.target`, then `sudo systemctl start gdm`.
+
 **llama.cpp's prompt cache.**
 - llama-server keeps earlier prompts' KV cache in system RAM, up to 8 GiB by default (`--cache-ram`). That is more than this box's 7.9 GB.
 - It wasn't the cause here, but available RAM fell by 1.6 GB over three long prompts as the cache filled.

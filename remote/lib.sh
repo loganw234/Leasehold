@@ -100,11 +100,14 @@ vram_gb() {
 }
 vram_used_gb() { vram_gb used; }
 
-# True if a screen is connected to one of an AMD GPU's outputs. Such a GPU needs VRAM for the
-# screen too: when the screen asks for some and none is free, the driver moves other buffers into
-# system RAM, which on an 8 GB card got llama-server killed by the OOM killer.
+# True if an AMD GPU drives a desktop: a screen connected to one of its outputs and a display
+# server running. Such a GPU needs VRAM for the desktop too: when the compositor asks for some and
+# none is free, the driver moves other buffers into system RAM, which on an 8 GB card got
+# llama-server killed by the OOM killer. A text console alone doesn't (tested with GDM stopped).
 gpu_drives_display() {
   local f card
+  pgrep -x 'Xorg|Xwayland|gnome-shell|kwin_wayland|sway|weston|mutter|cage|labwc' >/dev/null ||
+    systemctl is-active --quiet display-manager 2>/dev/null || return 1
   for f in /sys/class/drm/card*-*/status; do
     [[ -r "$f" && "$(cat "$f")" == connected ]] || continue
     card=${f%/status}

@@ -110,7 +110,10 @@ Setup overrides three defaults:
 - **llama.cpp's fitting.** When a context leaves less than 1 GiB of VRAM spare, llama.cpp moves layers to the CPU instead of failing (`--fit on`), and nothing in Lemonade's log says so. On an 8 GB card that made generation up to 3.5 times slower. Setup passes `--fit off -ngl all`.
 - **llama.cpp's prompt cache.** llama.cpp keeps earlier prompts' KV cache in system RAM, up to 8 GiB by default (`--cache-ram`). Setup caps it at a quarter of the machine's RAM.
 
-**A GPU that also drives a screen** needs VRAM of its own. When the screen asks for some and none is free, the driver moves the model's buffers into system RAM. On an 8 GB card at 131,072 tokens, that got llama-server killed by the OOM killer, both during a 120K-token prompt and when the login screen restarted. Setup warns when such a card has less than 1 GB free. Leave that much with a smaller `-CtxPerSlot` (65,536 on the RX 7600), or stop the desktop while serving. A droplet's MI300X drives no screen.
+**A GPU that also drives a desktop** needs VRAM of its own. When the compositor asks for some and none is free, the driver moves the model's buffers into system RAM. On an 8 GB card at 131,072 tokens, that got llama-server killed by the OOM killer, both during a 120K-token prompt and when the login screen restarted. Setup warns when such a card has less than 1 GB free.
+- Leave that much free with a smaller `-CtxPerSlot` (65,536 on the RX 7600).
+- Or turn the desktop off. `sudo systemctl stop gdm` works for now, and `sudo systemctl set-default multi-user.target` keeps it off after reboots. On the RX 7600 that freed 0.6 GB.
+- A text console on the screen is fine. A droplet's MI300X drives no screen.
 
 To see what a long context costs, `depth` sends prompts of 8K to 120K tokens. It checks that the model finds a fact hidden halfway down, and shows what a request longer than the context gets (HTTP 400):
 
