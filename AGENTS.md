@@ -11,7 +11,7 @@ Leasehold is a Windows PowerShell helper, `leasehold.ps1`, plus scripts that run
 - Every other command takes `-Machine <name>` too, for example `.\leasehold.ps1 rocm -Machine rocm-box`.
 - Put the remote command in single quotes. Windows PowerShell 5.1 mangles double quotes passed to `ssh`.
 - **If anything asks for a password, the grant is missing or broken.** Stop and ask the owner to run `.\leasehold.ps1 grant -Machine <name> -Ip <address> -User <their login>`. Never ask the owner to type a password into your tools.
-- Read the machine's `notes` before acting. They may limit what goes on the machine; for example, a machine kept as a clean room for other agents must not receive certain repositories or records.
+- Read the machine's notes before acting, and follow them. Every `-Machine` command prints them. They may limit what goes on the machine: a machine kept as a clean room for other agents must not receive certain repositories or records.
 
 ## Ask the owner first
 
@@ -19,7 +19,7 @@ Leasehold is a Windows PowerShell helper, `leasehold.ps1`, plus scripts that run
 - Changes to a machine's users, sudo rules, SSH configuration, network or firewall.
 - Reinstalling, wiping or repartitioning disks, and firmware updates.
 - Copying repositories, records or data onto a machine beyond what the task needs.
-- `grant` and `revoke`, which are the owner's to run.
+- `grant`, `revoke` and `note`, which are the owner's to run.
 
 Reboots and package installs that a Leasehold script asks for are part of the work. Do them, and say that you did.
 

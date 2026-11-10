@@ -95,6 +95,14 @@ After that, an assistant can work on the machine without prompts:
 
 Each `run` is appended to `runs.log`. [AGENTS.md](AGENTS.md) tells assistants what they may do and what to ask you first.
 
+To set limits for one machine, give it notes:
+
+```powershell
+.\leasehold.ps1 note -Machine rocm-box -Notes 'Clean room: never put project X or its records here.'
+```
+
+Every `-Machine` command prints them, and AGENTS.md asks assistants to follow them. Granting the machine again keeps them; `-Notes ''` clears them.
+
 **This gives the account full root on that machine.** Grant it only on a machine you would hand an assistant anyway, with nothing sensitive on it. To take it back:
 
 ```powershell

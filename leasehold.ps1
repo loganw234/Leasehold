@@ -41,6 +41,8 @@
     run        Run one command on a granted machine, never prompting: run -Machine <name> -- '<cmd>'.
                Each run is appended to runs.log.
     revoke     Remove the 'leasehold' account and its sudo rule: revoke -Machine <name> -User <you>.
+    note       Set your notes for a granted machine: note -Machine <name> -Notes '<text>'. Every
+               -Machine command shows them, and AGENTS.md asks assistants to follow them.
 
   The remote IP is remembered after setup or up, so later commands don't need -Ip.
   -User defaults to root (the droplet). For your own box, pass your login, e.g. -User ubuntu;
@@ -59,12 +61,13 @@
 param(
     [Parameter(Mandatory = $true, Position = 0)]
     [ValidateSet('setup', 'key', 'tunnel', 'pi', 'claude', 'rocm', 'vllm-test', 'logs', 'report', 'ssh',
-        'collect', 'bench', 'depth', 'toolcheck', 'status', 'down', 'up', 'grant', 'run', 'revoke')]
+        'collect', 'bench', 'depth', 'toolcheck', 'status', 'down', 'up', 'grant', 'run', 'revoke', 'note')]
     [string]$Command,
 
     [string]$Ip,
     [string]$User = 'root',
     [string]$Machine,
+    [string]$Notes,
     [string]$Model = 'Qwen3.6-35B-A3B-GGUF',
     [int]$Slots = 1,
     [int]$CtxPerSlot = 131072,
@@ -129,6 +132,8 @@ if ($Machine -and $Command -ne 'grant') {
         # The operator account logs in with a key and never prompts, so fail fast instead of waiting.
         $script:Batch = $true
     }
+    # The owner's notes can limit what may happen on the machine (AGENTS.md), so show them every time.
+    if ($entry.notes -and $Command -ne 'note') { Write-Host "Notes for ${Machine}: $($entry.notes)" -ForegroundColor Yellow }
 }
 
 if ($User -notmatch '^[a-z_][a-z0-9_-]*$') { throw "'$User' is not a valid Linux user name." }
@@ -500,6 +505,10 @@ switch ($Command) {
         $out = @(& ssh @sshArgs "$Operator@$ip" 'sudo -n true && hostname && ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub')
         if ($LASTEXITCODE -ne 0 -or $out.Count -lt 2) { throw "The '$Operator' account did not work without prompts: $($out -join ' ')" }
         $machines = Read-Machines
+        # Granting again keeps the owner's notes unless -Notes replaces them.
+        $keep = ''
+        if ($machines[$Machine] -and $machines[$Machine].notes) { $keep = [string]$machines[$Machine].notes }
+        if ($PSBoundParameters.ContainsKey('Notes')) { $keep = $Notes }
         $machines[$Machine] = [ordered]@{
             ip       = $ip
             user     = $Operator
@@ -507,13 +516,25 @@ switch ($Command) {
             host_key = ($out[1] -split ' ')[1]
             granted  = (Get-Date -Format 'yyyy-MM-dd')
             by       = $User
-            notes    = ''
+            notes    = $keep
         }
         Write-JsonFile $MachinesFile $machines
         Set-Content -Path $IpFile -Value $ip
         Write-Host "Granted. $Machine is $($out[0]) at $ip, host key $(($out[1] -split ' ')[1])."
         Write-Host "Assistants can now run: leasehold.ps1 run -Machine $Machine -- '<command>'"
         Write-Host "To take it back: leasehold.ps1 revoke -Machine $Machine -User $User"
+    }
+
+    'note' {
+        if (-not $Machine) { throw "note needs -Machine <name> and -Notes '<text>' (an empty -Notes '' clears them)." }
+        if (-not $PSBoundParameters.ContainsKey('Notes')) { throw "note needs -Notes '<text>'; -Notes '' clears the notes." }
+        $machines = Read-Machines
+        $entry = $machines[$Machine]
+        $entry | Add-Member -NotePropertyName notes -NotePropertyValue $Notes -Force
+        $machines[$Machine] = $entry
+        Write-JsonFile $MachinesFile $machines
+        if ($Notes) { Write-Host "Notes for $Machine saved. Every -Machine $Machine command shows them." }
+        else { Write-Host "Notes for $Machine cleared." }
     }
 
     'run' {
