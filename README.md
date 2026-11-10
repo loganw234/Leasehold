@@ -45,7 +45,7 @@ It's the deployment kit that [HonestHarness's research notes](https://github.com
    ```powershell
    path\to\Leasehold\leasehold.ps1 pi -Model Qwen3.6-35B-A3B-GGUF
    ```
-   - It writes Pi's provider config the way `lemonade launch pi` does, using the context size Lemonade reports for the model.
+   - It writes Pi's provider config the way `lemonade launch pi` does, using the context size Lemonade reports for the model. With several slots, Pi gets one slot's share.
    - Pi's config and sessions go in `pi-agent\` next to the script, or the folder you pass with `-PiDir`. Nothing goes in `~\.pi` or `~\.claude`.
    - Arguments after `--` go to Pi.
 
@@ -99,6 +99,16 @@ Each `run` is appended to `runs.log`. [AGENTS.md](AGENTS.md) tells assistants wh
 .\leasehold.ps1 revoke -Machine rocm-box -User <your-login>
 ```
 
+## Context size
+
+Setup pins the context at `-Slots` × `-CtxPerSlot` tokens, 131,072 by default, and puts every layer of the model on the GPU. If that doesn't fit in VRAM, the load fails and setup shows llama.cpp's error; run it again with a smaller `-CtxPerSlot`. On an 8 GB card, Qwen3.5-4B fits 131,072 tokens with one slot.
+
+Setup overrides two defaults:
+- **Lemonade's own pick.** Lemonade works the context out from the VRAM free when the model loads, so it can differ from one load to the next.
+- **llama.cpp's fitting.** When a context leaves less than 1 GiB of VRAM spare, llama.cpp moves layers to the CPU instead of failing (`--fit on`), and nothing in Lemonade's log says so. On an 8 GB card that made generation up to 3.5 times slower. Setup passes `--fit off -ngl all`.
+
+[The findings](docs/FINDINGS.md) have the measurements.
+
 ## Several agents at once
 
 By default, Lemonade gives each model one request at a time, so a second agent waits for the first. To serve four at once:
@@ -107,13 +117,11 @@ By default, Lemonade gives each model one request at a time, so a second agent w
 .\leasehold.ps1 setup -Slots 4 -CtxPerSlot 131072
 ```
 
-llama.cpp splits the context across slots, so each gets `CtxPerSlot` tokens.
+llama.cpp splits the context across the slots, so each gets `-CtxPerSlot` tokens. `pi` tells Pi that share, not the total Lemonade reports.
 
-The slot count goes in Lemonade's server-wide `llamacpp.rocm_args` setting, so it applies to every llama.cpp model on that server. That keeps the sampler settings Lemonade applies per model family; passing `--parallel` as a model's own arguments would replace them.
+The slot count and the flags above go in Lemonade's server-wide `llamacpp.rocm_args` setting, so they apply to every llama.cpp model on that server. That keeps the sampler settings Lemonade applies per model family; passing them as a model's own arguments would replace them.
 
-To keep two different models loaded together, raise `-MaxModels`. Running setup again reloads the model with the new settings, and `-Slots 1` puts back one slot with the largest context that fits.
-
-Lemonade works out that largest context from the VRAM free when the model loads, so it can differ from one load to the next. On an 8 GB card, the larger of two picks ran about 20% slower; [the findings](docs/FINDINGS.md) have the measurements.
+To keep two different models loaded together, raise `-MaxModels`. Running setup again reloads the model with the new settings, and `-Slots 1` puts back one slot.
 
 To see what slots buy, `bench` times one request and then several at once:
 
@@ -178,7 +186,7 @@ HonestHarness's notes list eight requirements for a deployment kit (§5.2, K1–
 
 | Requirement | Status |
 |---|---|
-| K1. A pinned recipe: weights by revision, quantisation, engine version, serving flags, chat-template hash | Partly: `collect` records the model revisions and the Lemonade, llama.cpp and ROCm versions afterwards, but nothing pins them beforehand |
+| K1. A pinned recipe: weights by revision, quantisation, engine version, serving flags, chat-template hash | Partly: setup pins the context, the slot count and every layer on the GPU. `collect` records the model revisions and the Lemonade, llama.cpp and ROCm versions afterwards, but nothing pins those beforehand |
 | K2. An identity probe: model list, template hash, maximum context, a canary tool call, the model each response reports | Partly: setup's smoke tests include a tool call |
 | K3. Leases with a time limit, a budget cap, idle shutdown, and teardown confirmed by the provider | Partly: `status` shows cost, and `down` destroys through the provider's API after you type the name |
 | K4. Cost per lease, attributed to the agents that used it | Partly: `down` records each lease's hours and approximate cost, and `collect` its token usage per model; nothing attributes either to agents yet |
@@ -190,6 +198,8 @@ HonestHarness's notes list eight requirements for a deployment kit (§5.2, K1–
 ## Troubleshooting
 
 - **Setup stopped partway:** run `setup` again.
+- **Setup says the model doesn't fit:** run it again with a smaller `-CtxPerSlot` or fewer `-Slots`, or use a smaller model.
+- **Setup waits for apt:** Ubuntu's unattended upgrades hold apt's lock, once for 24 minutes on the test box. Setup waits up to 30 minutes and names the process every 5 minutes.
 - **Server won't start:** `.\leasehold.ps1 ssh`, then `journalctl -u lemond -n 100`.
 - **Port 13305 is busy on your PC** (a local Lemonade, for example): add `-LocalPort 13306` to both `tunnel` and `pi` or `claude`.
 - **"REMOTE HOST IDENTIFICATION HAS CHANGED":** delete `.known_hosts` in this folder. Droplet IPs get reused with new host keys.

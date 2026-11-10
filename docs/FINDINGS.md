@@ -6,27 +6,69 @@ The test machine for the 2026-11-09/10 entries was an Ubuntu 24.04 desktop with 
 
 ---
 
-## 2026-11-10: Lemonade's automatic context, and a slowdown near full VRAM
+## 2026-11-10: near full VRAM, llama.cpp quietly moves layers to the CPU
 
-With one slot, setup loads the model with `--ctx-size=-1` and Lemonade picks the context.
+**Seen.** With one slot, setup used to let Lemonade pick the context (`--ctx-size=-1`). On the same card, with the same model and Lemonade version, it picked 95,354 tokens on 2026-11-09 and 98,631 on 2026-11-10. The larger pick generated about 20% slower.
 
-- **How it picks.** Lemonade sizes the context when the model loads, from the VRAM free at that moment.
-  - It takes the card's total minus what is in use, then subtracts the weights and a reserve for headroom and compute buffers. The rest becomes context (`src/cpp/include/lemon/auto_context_budget.h` on Lemonade's main branch).
-  - The server log records the result, for example `Auto-tune ctx_size resolved to 98631`.
-- **So the number varies between loads.** On the same card, with the same model and Lemonade version, it came out at 95,354 tokens on 2026-11-09 and at 98,631 on 2026-11-10.
-- **The larger pick ran about 20% slower.** Qwen3.5-4B-GGUF was loaded with one slot at three context sizes, with two speed runs at each size (setup's 768-token speed test):
+**How Lemonade picks.**
+- Lemonade sizes the context when the model loads, from the VRAM free at that moment.
+- It takes the card's total minus what is in use, then subtracts the weights and a reserve for headroom and compute buffers. The rest becomes context (`src/cpp/include/lemon/auto_context_budget.h` on Lemonade's main branch).
+- The server log records the result, for example `Auto-tune ctx_size resolved to 98631`.
 
-  | Context | VRAM in use | Speed |
-  |---|---|---|
-  | 65,536 | 6.9 GB | 57.1 and 57.2 tok/s |
-  | 95,354 | 7.9 GB | 57.5 and 57.5 tok/s |
-  | 98,631 | 7.9 GB | 46.4 and 46.1 tok/s |
+**Why the larger pick ran slower.**
+- Lemonade starts llama-server with an explicit `--ctx-size` but no `-ngl`.
+- This llama.cpp build (b11836) defaults to `-ngl auto` with `--fit on`, "whether to adjust unset arguments to fit in device memory", keeping a margin of 1024 MiB (`--fit-target`).
+- When the context leaves less than that margin, fit moves layers to the CPU. At Lemonade's log level nothing says so.
+- Run by hand with fit on, llama-server held VRAM at 7.6 GB at both 98,631 and 131,072 tokens: the card's 8.6 GB less the margin.
 
-  GTT (system memory mapped for the GPU) stayed at 766 MB at all three sizes, so this is not an obvious spill into system memory. The cause is not known.
-- **What it means for the kit.**
-  - On an 8 GB card, the same `setup` can come out 20% slower, depending on what else used VRAM when the model loaded.
-  - The context is also missing from the recipe (K1) unless it is pinned.
-  - On an MI300X, the model's own context limit will probably bind long before VRAM does, so the slowdown may not show there.
+Qwen3.5-4B-GGUF, one slot, setup's 768-token speed test, two runs at each size:
+
+| Context | llama.cpp's default (`--fit on`) | `--fit off -ngl all` |
+|---|---|---|
+| 65,536 | 57.1 and 57.2 tok/s, 6.9 GB | |
+| 95,354 | 57.5 and 57.5 tok/s, 7.9 GB | |
+| 98,631 | 46.4 and 46.1 tok/s, 7.9 GB | 55.7 and 53.8 tok/s, 8.1 GB |
+| 131,072 | 15.4 and 16.9 tok/s, 8.0 GB | 51.3 and 52.9 tok/s, 8.3 GB |
+| 262,144 | | Load fails: `cudaMalloc failed: out of memory` for an 8,192 MiB KV cache |
+
+GTT (system memory mapped for the GPU) stayed at 766 MB throughout, so the CPU-side layers don't show up there.
+
+**Fix.**
+- Setup now pins the context at slots × `-CtxPerSlot`, one slot included. The default is 131,072 tokens.
+- It adds `--fit off -ngl all` to the server-wide `llamacpp.rocm_args`. Every layer then goes on the GPU, or the load fails.
+- When a load fails, setup reads llama.cpp's lines from the server log and says the model and context don't fit. Lemonade's own message suggests missing drivers or an incompatible model file.
+- Lemonade saves the requested settings even when the load fails, so setup's message also says the model won't load on demand until setup succeeds.
+
+**Tested on the RX 7600.**
+- Default setup, one slot, 131,072 tokens: 8.4 of 8.6 GB, smoke tests passed, 57.2 and 56.9 tok/s.
+- Four slots of 32,768: 8.5 GB, smoke tests passed, 57.3 tok/s.
+- 262,144 tokens: setup stopped after 43 s with llama.cpp's lines, starting `allocating 8192.00 MiB on device 0: cudaMalloc failed: out of memory`, and the message above.
+
+**The first failure check missed.** It piped `journalctl` into `grep -q`. grep stops at the first match, which can end journalctl with SIGPIPE, and under `set -o pipefail` the pipe then counts as failed. Setup now reads the log into a variable first.
+
+**Pi's context window.**
+- With several slots, Lemonade reports the whole context (`context_length` 131,072 for 4 × 32,768), and `pi` passed that on: four times what one agent's requests get.
+- `pi` now divides by the `--parallel` value. It reads that from `/api/v1/health`, or from `/internal/config` if the model isn't loaded yet.
+- With 4 × 32,768 it told Pi 32,768 tokens.
+
+**On an MI300X**, the default model leaves well over 100 GB of VRAM free, so fit wouldn't have moved anything. The flags matter on small cards and for models near the limit.
+
+## 2026-11-10: an unattended upgrade held apt for 24 minutes
+
+- **What happened.**
+  - Ubuntu's daily unattended upgrade held apt's lock from 06:30 to 06:55 local time.
+  - It upgraded about 150 packages, including systemd, OpenSSH, sudo and a new HWE kernel (7.0.0-42), and auto-removed an older kernel.
+- **Setup's wait was too short.**
+  - A setup started during the upgrade waited its 10 minutes and then carried on anyway. The upgrade happened to finish a minute later.
+  - The apt retry added earlier that day also waited for the lock again before each of its three tries.
+- **Fix.**
+  - `wait_for_apt` now waits up to 30 minutes. Every 5 minutes it names the process holding the lock: `Waiting for unattended-upgr to let go of apt (5 min so far)...`.
+  - `apt_update` waits once, then retries.
+  - A stub test checked a lock held for 3 and 70 checks (released, no warning) and one never released (one warning at 30 minutes).
+- **The GPU driver module was rebuilt.**
+  - DKMS built amdgpu for the new kernel during the upgrade: `dkms status` lists amdgpu 7.1.9 for both 7.0.0-30 and 7.0.0-42.
+  - The box still runs 7.0.0-30 and reports a restart required. ROCm on 7.0.0-42 is unchecked until it reboots.
+- **On a droplet**, the same timers can fire soon after first boot. Once an upgrade is running, waiting is the only safe choice, at $1.99/hour.
 
 ## 2026-11-10: an Ubuntu mirror mid-sync stopped setup
 
@@ -104,11 +146,11 @@ With four slots, four requests run at 2.6 times the throughput of one. Each requ
 --chat-template-kwargs '{"preserve_thinking":true}' --min-p 0.00 --parallel 4 --repeat-penalty 1.0 --temp 1.0 --top-k 20 --top-p 0.95
 ```
 
-The catch is that the slot count applies to every llama.cpp model on that server. `-Slots 1` clears the setting and loads with `--ctx-size=-1`, so Lemonade again picks the largest context that fits.
+The catch is that the slot count applies to every llama.cpp model on that server. `-Slots 1` cleared the setting and loaded with `--ctx-size=-1`, so Lemonade picked the context. Setup now pins it; see the entry above on llama.cpp moving layers to the CPU.
 
 **Checked end to end through setup.**
 - `setup -Slots 4 -CtxPerSlot 16384` took 87 s on a box that already had everything downloaded. The model loaded with `ctx_size` 65,536 and the arguments above, and all three smoke tests passed.
-- A plain `setup` then put back one slot: the sampler settings with `--parallel 1`, and an automatic context (see the entry above on Lemonade's automatic context).
+- A plain `setup` then put back one slot: the sampler settings with `--parallel 1`, and an automatic context, which setup no longer uses.
 
 ## 2026-11-09: what to save before a droplet is destroyed
 
@@ -183,5 +225,5 @@ On Ubuntu, the Lemonade package keeps:
 - Can Lemonade reuse a system ROCm 10.1 instead of downloading about 2 GB of its own?
 - Should long remote installs run detached (`systemd-run`) so a dropped SSH session can't stop them halfway?
 - The PPA release pins llama.cpp b11836, while Lemonade's main branch is on b12109. Does the difference matter for the models in use?
-- On the RX 7600, why does generation run about 20% slower at 98,631 tokens of context than at 95,354?
-- Should setup pin the context with one slot too, so the recipe records it and runs repeat?
+- Does ROCm 10.1 work on the 7.0.0-42 kernel the unattended upgrade installed? It stays unchecked until the box reboots.
+- Should setup stop Ubuntu's apt timers on a droplet, so an upgrade soon after first boot can't hold apt while the GPU bills?

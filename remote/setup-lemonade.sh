@@ -8,8 +8,9 @@
 # Settings (environment variables):
 #   MODEL         Lemonade model to pull and load            (default: Qwen3.6-35B-A3B-GGUF)
 #   SLOTS         requests the model serves at once          (default: 1, Lemonade's own default)
-#   CTX_PER_SLOT  context per slot when SLOTS > 1            (default: 131072)
-#                 With SLOTS=1, Lemonade picks the largest context that fits.
+#   CTX_PER_SLOT  tokens of context for each slot            (default: 131072)
+#                 The context is pinned at SLOTS x CTX_PER_SLOT with every layer on the GPU;
+#                 if that doesn't fit in VRAM, the load fails and setup says so.
 #   MAX_MODELS    LLMs kept loaded at the same time          (default: 2)
 #   SKIP_TESTS=1  skip the smoke tests at the end
 set -euo pipefail
@@ -75,19 +76,33 @@ log "Downloading $MODEL (resumes if a previous run was interrupted)"
 lemonade pull "$MODEL"
 
 log "Loading $MODEL"
-# --parallel goes in the server-wide llamacpp.rocm_args setting. As the model's own llamacpp_args
-# it would replace the sampler settings Lemonade applies per model architecture (for Qwen3.5:
-# --temp 1.0 --top-p 0.95 --top-k 20 and preserve_thinking), which this way are kept.
-if ((SLOTS > 1)); then
-  lemonade config set "llamacpp.rocm_args=--parallel $SLOTS" >/dev/null
-  # llama.cpp splits the context across slots, so give it slots x per-slot context.
-  ctx=$((SLOTS * CTX_PER_SLOT))
-  info "$SLOTS slots x $CTX_PER_SLOT tokens = $ctx tokens of context"
-else
-  lemonade config set "llamacpp.rocm_args=" >/dev/null
-  ctx=-1   # Lemonade picks the largest context that fits
+# The context is pinned at SLOTS x CTX_PER_SLOT; llama.cpp splits it across the slots. Left to
+# Lemonade (--ctx-size=-1), it would depend on the VRAM free when the model loads.
+# The llama.cpp flags go in the server-wide llamacpp.rocm_args setting. As the model's own
+# llamacpp_args they would replace the sampler settings Lemonade applies per model architecture
+# (for Qwen3.5: --temp 1.0 --top-p 0.95 --top-k 20 and preserve_thinking).
+#   --fit off -ngl all  Every layer on the GPU, or the load fails. llama.cpp's default (--fit on)
+#                       keeps 1 GiB of VRAM spare by quietly moving layers to the CPU; on an 8 GB
+#                       card that made generation up to 3.5 times slower.
+#   --parallel N        N slots: requests served at once.
+ctx=$((SLOTS * CTX_PER_SLOT))
+rocm_args='--fit off -ngl all'
+if ((SLOTS > 1)); then rocm_args+=" --parallel $SLOTS"; fi
+lemonade config set "llamacpp.rocm_args=$rocm_args" >/dev/null
+info "$SLOTS slot(s) x $CTX_PER_SLOT tokens = $ctx tokens of context, every layer on the GPU"
+load_start=$(date '+%Y-%m-%d %H:%M:%S')
+if ! lemonade load "$MODEL" --llamacpp rocm "--ctx-size=$ctx" --save-options; then
+  # Lemonade's own message suggests missing drivers; llama.cpp's lines in the server log say what
+  # happened. The log goes into a variable first: grep -q on a pipe can end journalctl early, and
+  # pipefail would then count the whole pipe as failed.
+  load_log=$(journalctl -u "$UNIT" --since "$load_start" --no-pager -o cat 2>/dev/null || true)
+  oom='out of memory|failed to allocate|unable to allocate|failed to create_context'
+  if grep -qiE "$oom" <<<"$load_log"; then
+    grep -iE "$oom" <<<"$load_log" | head -3 | sed -E 's/^.*\(Process\) [0-9.]+ [A-Z] /    llama.cpp: /' || true
+    die "$MODEL with $ctx tokens of context doesn't fit in the GPU's memory. Lemonade saved these settings anyway, so it can't load the model on demand until setup succeeds. Run setup again with a smaller -CtxPerSlot or fewer -Slots, or use a smaller model."
+  fi
+  die "Loading $MODEL failed. Check: journalctl -u $UNIT -n 100"
 fi
-lemonade load "$MODEL" --llamacpp rocm "--ctx-size=$ctx" --save-options
 lemonade status --json | jq '.models[] | {model_name, recipe, status, recipe_options}'
 info "VRAM in use: $(vram_gb used) GB of $(vram_gb total) GB"
 

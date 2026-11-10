@@ -26,22 +26,28 @@ detect_gfx() {
   return 1
 }
 
-# Waits while another process (cloud-init, unattended-upgrades) holds apt's or dpkg's locks.
-# It checks who holds the lock files rather than process names: Ubuntu's always-running
-# unattended-upgrade-shutdown helper shares the name "unattended-upgr" with a real upgrade.
+# Waits while another process (cloud-init, unattended-upgrades) holds apt's or dpkg's locks, for
+# up to 30 minutes: Ubuntu's daily unattended upgrade, a new kernel included, took 24 minutes on
+# the test box. It checks who holds the lock files rather than process names: Ubuntu's
+# always-running unattended-upgrade-shutdown helper shares the name "unattended-upgr" with a real
+# upgrade.
 wait_for_apt() {
-  local i
+  local i pids names
   local locks=(/var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock /var/cache/apt/archives/lock)
-  for ((i = 0; i < 120; i++)); do
+  for ((i = 0; i < 360; i++)); do
     if command -v fuser >/dev/null; then
-      fuser "${locks[@]}" >/dev/null 2>&1 || return 0
+      pids=$(fuser "${locks[@]}" 2>/dev/null | xargs) || true
     else
-      pgrep -x 'apt|apt-get|dpkg' >/dev/null || return 0
+      pids=$(pgrep -x 'apt|apt-get|dpkg' | xargs) || true
     fi
-    ((i == 0)) && info "Waiting for another apt/dpkg process to finish..."
+    [[ -z "$pids" ]] && return 0
+    if ((i % 60 == 0)); then
+      names=$(ps -o comm= -p "${pids// /,}" 2>/dev/null | sort -u | paste -sd, -) || true
+      info "Waiting for ${names:-another apt/dpkg process} to let go of apt ($((i / 12)) min so far)..."
+    fi
     sleep 5
   done
-  warn "apt is still busy after 10 minutes; continuing anyway."
+  warn "apt is still busy after 30 minutes; continuing anyway."
 }
 
 # Refreshes apt's package lists, retrying because an Ubuntu mirror in the middle of a sync makes
@@ -49,8 +55,8 @@ wait_for_apt() {
 # still fails to refresh only matters if a package is missing, and then apt_install fails loudly.
 apt_update() {
   local i
+  wait_for_apt
   for ((i = 1; i <= 3; i++)); do
-    wait_for_apt
     apt-get -o DPkg::Lock::Timeout=600 update -qq && return 0
     ((i < 3)) && { warn "apt-get update failed (try $i of 3); retrying in 20 s."; sleep 20; }
   done

@@ -248,6 +248,24 @@ function Get-ModelContext([string]$Base, [string]$ModelName) {
     return $null
 }
 
+# How many requests the server runs at once for the model: llama.cpp's --parallel, which splits the
+# model's context evenly across that many slots. Lemonade reports the whole context.
+function Get-ModelSlots([string]$Base, [string]$ModelName) {
+    $flags = $null
+    try {
+        $health = Invoke-RestMethod "$Base/api/v1/health" -TimeoutSec 10
+        foreach ($m in @($health.all_models_loaded)) {
+            if ($m.model_name -eq $ModelName) { $flags = [string]$m.recipe_options.llamacpp_args }
+        }
+    } catch { }
+    if (-not $flags) {
+        # Not loaded yet: it will load with the server-wide flags that setup set.
+        try { $flags = [string](Invoke-RestMethod "$Base/internal/config" -TimeoutSec 10).llamacpp.rocm_args } catch { }
+    }
+    if ($flags -match '(?:--parallel|-np)\s+(\d+)') { return [int]$Matches[1] }
+    return 1
+}
+
 function Write-JsonFile([string]$Path, $Object) {
     # UTF-8 without a byte-order mark; Windows PowerShell's Set-Content would add one.
     $json = ConvertTo-Json -InputObject $Object -Depth 10
@@ -321,6 +339,13 @@ switch ($Command) {
         if (-not $ctx) {
             $ctx = $ContextWindow
             Write-Host "Couldn't read $Model's context size from Lemonade; telling Pi $ctx tokens (-ContextWindow changes it)."
+        } else {
+            # With several slots, one agent's requests get one slot's share of the context.
+            $slots = Get-ModelSlots $base $Model
+            if ($slots -gt 1) {
+                $ctx = [int][math]::Floor($ctx / $slots)
+                Write-Host "$Model serves $slots requests at once, so each gets $ctx tokens of context."
+            }
         }
         # The same provider block `lemonade launch pi` writes (src/cpp/cli/pi_profile.cpp in Lemonade).
         Write-JsonFile (Join-Path $agentDir 'models.json') ([ordered]@{
