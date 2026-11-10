@@ -6,6 +6,35 @@ The test machine for the 2026-11-09/10 entries was an Ubuntu 24.04 desktop with 
 
 ---
 
+## 2026-11-10: Pi agents on the RX 7600: how much context each agent needs
+
+**The trial.**
+- Pi 1.5.0 worked through six small coding tasks, Python and C, each graded by its own tests, against Lemonade on the same box. The model was Qwen3.5-4B-GGUF.
+- Pi ran as a throwaway account inside a transient systemd service. The grader and the original tests sat in root-owned `/opt`, where the agent couldn't change them.
+- The tasks, scripts and full results are kept outside this repository, with the owner's notes.
+
+**Results.**
+
+| Run | Agents at once | Context per agent | Passed | Wall time | Prompt tokens from cache |
+|---|---|---|---|---|---|
+| 1 | 1 | 65,536 | 6 of 6 | 31 min | 92% |
+| 2 | 2 | 32,768 | 4 of 6 | 19 min | 84% |
+
+**What it means for the kit.**
+- **Give each agent at least 64K tokens.**
+  - In run 1, one session peaked at 49,023 tokens and still passed.
+  - In run 2, both failures ran out of room. Pi compacted its history four times in a row, and every compaction made the server re-read 22–24K tokens. Twice a reply hit the output limit, once cutting off an `edit` call's arguments.
+  - On an MI300X, `-Slots 4 -CtxPerSlot 131072` gives each of four agents 128K.
+- **A `length` stop ends Pi's print mode with exit code 0 and no output.** A harness has to grade the work, or read the transcript's last `stopReason`, to know that a session ran out of room.
+- **Pi's `thinkingLevel: off` doesn't reach the model over `openai-completions`.** Qwen3.5 reasoned anyway, as its chat template does by default. Lemonade doesn't count reasoning tokens separately; they are inside the output tokens.
+- **Every tool call was well formed.** The tool errors Pi recorded (26 in run 1) were bash commands that failed, such as failing tests and compiler errors.
+- **The confinement held.** These systemd properties gave the agent only what it needed:
+  - `IPAddressDeny=any` with `IPAddressAllow=localhost`;
+  - `ProtectSystem=strict` with `ReadWritePaths=` its home;
+  - `PrivateTmp`, `NoNewPrivileges` and `MemoryMax=3G`.
+
+  A probe confirmed Lemonade answered on localhost while the internet was blocked. `/etc` and the grader were read-only, the home was writable, and `sudo` was refused. This is one way to enforce the clean-room block on the agents' machine without a Pi extension.
+
 ## 2026-11-10: setup from nothing, as on a new droplet
 
 **The wipe.**
