@@ -14,6 +14,7 @@ It's the deployment kit that [HonestHarness's research notes](https://github.com
 | `remote/setup-lemonade.sh` | the remote machine | Installs Lemonade from its stable PPA, loads a model on the llama.cpp ROCm backend, runs smoke tests |
 | `remote/vllm-gfx942-test.sh` | an MI300X | Builds Lemonade with `vllm-enable-gfx942.patch` and tests which vLLM-ROCm build works on gfx942 |
 | `remote/lib.sh` | the remote machine | Helpers shared by the remote scripts |
+| `remote/collect.sh` | the remote machine | Gathers Lemonade's records before a lease ends (`collect`, `down`) |
 | `remote/grant-operator.sh` | the remote machine | Creates the account AI assistants use (`grant`) |
 | `AGENTS.md` | AI assistants | What assistants may do on granted machines, and what to ask first |
 | `rocm-box/` | your own Ubuntu box | Installs ROCm 10.1 and checks HIP with a small test program; see [its README](rocm-box/README.md) |
@@ -52,7 +53,12 @@ It's the deployment kit that [HonestHarness's research notes](https://github.com
    .\leasehold.ps1 down
    .\leasehold.ps1 status
    ```
-   Without doctl, use the console: Droplets → your droplet → Destroy.
+   Before it destroys anything, `down` saves the droplet's records to `reports\records-<name>-<time>\` on your PC:
+   - `summary.txt`: the versions that ran, each model with the Hugging Face revision it was pulled at, and token usage per model.
+   - The server's log, Lemonade's config, and its health, stats and system info.
+   - The setup log, and the vLLM test's report if there is one.
+
+   After the droplet is destroyed, `down` adds `lease.json` with the hours and approximate cost. `collect` saves the same records at any time, from any machine; `down -NoCollect` skips them. Without doctl, run `collect`, then destroy the droplet in the console: Droplets → your droplet → Destroy.
 
 ## Your own Ubuntu box
 
@@ -156,10 +162,10 @@ HonestHarness's notes list eight requirements for a deployment kit (§5.2, K1–
 
 | Requirement | Status |
 |---|---|
-| K1. A pinned recipe: weights by revision, quantisation, engine version, serving flags, chat-template hash | Not yet. Models are named from Lemonade's catalog, and Lemonade comes from its PPA unpinned |
+| K1. A pinned recipe: weights by revision, quantisation, engine version, serving flags, chat-template hash | Partly: `collect` records the model revisions and the Lemonade, llama.cpp and ROCm versions afterwards, but nothing pins them beforehand |
 | K2. An identity probe: model list, template hash, maximum context, a canary tool call, the model each response reports | Partly: setup's smoke tests include a tool call |
 | K3. Leases with a time limit, a budget cap, idle shutdown, and teardown confirmed by the provider | Partly: `status` shows cost, and `down` destroys through the provider's API after you type the name |
-| K4. Cost per lease, attributed to the agents that used it | Partly: `status` estimates cost; nothing is recorded |
+| K4. Cost per lease, attributed to the agents that used it | Partly: `down` records each lease's hours and approximate cost, and `collect` its token usage per model; nothing attributes either to agents yet |
 | K5. Warm starts: weights cached on the provider, start-up time recorded | Not yet |
 | K6. Data governance: which repositories may go to which provider | Not yet |
 | K7. Endpoints that vanish: resume on the same fingerprint, never silently on another model | Not yet; mostly the harness's job |

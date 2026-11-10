@@ -26,11 +26,18 @@ detect_gfx() {
   return 1
 }
 
-# Waits for apt/dpkg locks held by cloud-init or unattended-upgrades on a fresh droplet.
+# Waits while another process (cloud-init, unattended-upgrades) holds apt's or dpkg's locks.
+# It checks who holds the lock files rather than process names: Ubuntu's always-running
+# unattended-upgrade-shutdown helper shares the name "unattended-upgr" with a real upgrade.
 wait_for_apt() {
   local i
+  local locks=(/var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock /var/cache/apt/archives/lock)
   for ((i = 0; i < 120; i++)); do
-    pgrep -x 'apt|apt-get|dpkg|unattended-upgr' >/dev/null || return 0
+    if command -v fuser >/dev/null; then
+      fuser "${locks[@]}" >/dev/null 2>&1 || return 0
+    else
+      pgrep -x 'apt|apt-get|dpkg' >/dev/null || return 0
+    fi
     ((i == 0)) && info "Waiting for another apt/dpkg process to finish..."
     sleep 5
   done
@@ -62,14 +69,15 @@ wait_for_server() {  # [timeout_seconds]
   return 1
 }
 
-# Total VRAM in use across AMD GPUs, in GB, read from amdgpu's sysfs counters.
-vram_used_gb() {
+# VRAM across AMD GPUs, in GB, from amdgpu's sysfs counters: vram_gb used, or vram_gb total.
+vram_gb() {
   local f total=0
-  for f in /sys/class/drm/card*/device/mem_info_vram_used; do
+  for f in /sys/class/drm/card*/device/mem_info_vram_"$1"; do
     [[ -r "$f" ]] && total=$((total + $(cat "$f")))
   done
   awk -v b="$total" 'BEGIN { printf "%.1f", b / 1e9 }'
 }
+vram_used_gb() { vram_gb used; }
 
 # One OpenAI-style chat request. Prints the reply; returns non-zero if nothing came back.
 # Reasoning models may answer only in reasoning_content when max_tokens runs out, so either counts.

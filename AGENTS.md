@@ -15,7 +15,7 @@ Leasehold is a Windows PowerShell helper, `leasehold.ps1`, plus scripts that run
 
 ## Ask the owner first
 
-- Anything that costs money. State the hourly price before creating a droplet (`up`), and never destroy a droplet you did not create.
+- Anything that costs money. State the hourly price before creating a droplet (`up`), and never destroy a droplet you did not create. When you do destroy one, let `down` save its records first; pass `-NoCollect` only if the owner says so.
 - Changes to a machine's users, sudo rules, SSH configuration, network or firewall.
 - Reinstalling, wiping or repartitioning disks, and firmware updates.
 - Copying repositories, records or data onto a machine beyond what the task needs.

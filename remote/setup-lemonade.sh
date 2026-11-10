@@ -84,7 +84,7 @@ if ((SLOTS > 1)); then
 fi
 lemonade load "$MODEL" "${load_args[@]}"
 lemonade status --json | jq '.models[] | {model_name, recipe, status, recipe_options}'
-info "VRAM in use: $(vram_used_gb) GB of 192"
+info "VRAM in use: $(vram_gb used) GB of $(vram_gb total) GB"
 
 if [[ "$SKIP_TESTS" != 1 ]]; then
   log "Smoke test 1/3: chat completion"

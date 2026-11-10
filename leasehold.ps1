@@ -19,7 +19,11 @@
     report     Copy the vLLM test report to .\reports\ next to this script.
     ssh        Open a shell on the remote machine.
     status     List your GPU droplets with age and approximate cost (needs doctl).
+    collect    Save the machine's Lemonade records (config, server log, usage per model, model
+               revisions, versions) to .\reports\records-<name>-<time>\ on this PC.
     down       Destroy a GPU droplet (needs doctl). Billing stops only when a droplet is destroyed.
+               Runs collect first, then writes lease.json (hours, cost) beside the records;
+               -NoCollect skips that.
     up         Create the droplet with doctl. Optional; the web console works too.
 
   For AI assistants (see AGENTS.md):
@@ -47,7 +51,7 @@
 param(
     [Parameter(Mandatory = $true, Position = 0)]
     [ValidateSet('setup', 'key', 'tunnel', 'pi', 'claude', 'rocm', 'vllm-test', 'logs', 'report', 'ssh',
-        'status', 'down', 'up', 'grant', 'run', 'revoke')]
+        'collect', 'status', 'down', 'up', 'grant', 'run', 'revoke')]
     [string]$Command,
 
     [string]$Ip,
@@ -75,6 +79,7 @@ param(
     [string]$Region,
     [string]$SshKey,
     [string]$DropletId,
+    [switch]$NoCollect,
 
     # pi / claude: anything after -- goes to the agent. run: the remote command.
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -179,6 +184,27 @@ function Send-Scripts {
     if ($LASTEXITCODE -ne 0) { throw 'Upload failed.' }
     # Files edited on Windows may have CRLF line endings, which bash and git apply reject.
     Invoke-Remote "sed -i 's/\r`$//' $RemoteDir/*.sh $RemoteDir/*.patch && chmod +x $RemoteDir/*.sh"
+}
+
+# Gathers the machine's Lemonade records (remote/collect.sh) into reports\records-<label>-<time>\
+# on this PC and returns that folder.
+function Save-Records([string]$Label) {
+    # Remote output goes to the host, so the folder is this function's only output.
+    $ip = Resolve-Ip
+    $dest = Join-Path $PSScriptRoot ('reports\records-' + $Label + '-' + (Get-Date -Format 'yyyyMMdd-HHmm'))
+    New-Item -ItemType Directory -Force -Path $dest | Out-Null
+    Send-Scripts | Out-Host
+    $remoteTar = '/tmp/leasehold-records.tar.gz'
+    Invoke-Remote "${Sudo}bash $RemoteDir/collect.sh $remoteTar $User" | Out-Host
+    $scpArgs = Get-SshArgs
+    $localTar = Join-Path $dest 'records.tar.gz'
+    & scp @scpArgs "${User}@${ip}:$remoteTar" $localTar | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw 'Copying the records to this PC failed.' }
+    Invoke-Remote "rm -f $remoteTar" | Out-Host
+    # Windows 10 and 11 ship tar.exe, which unpacks .tar.gz.
+    & tar -xzf $localTar -C $dest | Out-Host
+    if ($LASTEXITCODE -ne 0) { Write-Warning "Could not unpack $localTar; the archive itself is intact." }
+    return $dest
 }
 
 function Test-Lemonade([string]$Base) {
@@ -480,6 +506,13 @@ switch ($Command) {
         Write-Host "Each MI300X bills about `$$UsdPerGpuHour/hour until destroyed, powered off or not."
     }
 
+    'collect' {
+        $label = $Machine
+        if (-not $label) { $label = Resolve-Ip }
+        $dest = Save-Records $label
+        Write-Host "Records saved to $dest"
+    }
+
     'down' {
         Assert-Doctl
         $list = @(Get-GpuDroplets)
@@ -489,11 +522,43 @@ switch ($Command) {
         else { $list | Format-Table -AutoSize; throw 'More than one GPU droplet; pass -DropletId <id>.' }
         if (-not $target) { throw "No GPU droplet with id $DropletId." }
         $target | Format-List
-        Write-Host 'Destroying deletes everything on the droplet. Copy reports first (leasehold.ps1 report).'
+        $records = $null
+        if ($NoCollect) {
+            Write-Host 'Skipping the records (-NoCollect).'
+        }
+        elseif (-not $target.Ip) {
+            Write-Warning 'The droplet has no public IP, so its records cannot be saved first.'
+        }
+        else {
+            Write-Host "Saving the droplet's records to this PC first..."
+            $script:Ip = $target.Ip
+            try {
+                $records = Save-Records $target.Name
+                Write-Host "Records saved to $records"
+            }
+            catch {
+                Write-Warning "Saving the records failed: $($_.Exception.Message)"
+                Write-Warning 'Destroying now loses whatever is on the droplet.'
+            }
+        }
+        Write-Host 'Destroying deletes everything on the droplet.'
         $answer = Read-Host "Type the droplet name ($($target.Name)) to destroy it"
         if ($answer -ne $target.Name) { Write-Host 'Names did not match. Nothing was destroyed.'; return }
         & doctl compute droplet delete $target.Id --force
         if ($LASTEXITCODE -ne 0) { throw 'doctl could not destroy the droplet. Check the web console.' }
+        if ($records) {
+            # What the lease cost, beside what it ran (HonestHarness K4).
+            Write-JsonFile (Join-Path $records 'lease.json') ([ordered]@{
+                name        = $target.Name
+                id          = $target.Id
+                size        = $target.Size
+                region      = $target.Region
+                image       = $target.Image
+                hours       = $target.Hours
+                approx_cost = $target.ApproxCost
+                destroyed   = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+            })
+        }
         if ($target.Ip -and (Test-Path $KnownHosts)) {
             # Forget the old host key; the next droplet on this IP will have a new one.
             $ErrorActionPreference = 'Continue'
